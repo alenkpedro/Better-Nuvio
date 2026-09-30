@@ -167,6 +167,7 @@ static char cabecalhosMac[4096];
 int video_tocar(const char *u) {
   snprintf(urlAtual, sizeof urlAtual, "%s", u ? u : "");
 #ifdef NV_MAC_VIDEO
+  mac_video_preferir_audio(ling_audio());
   return mac_video_tocar(u, cabecalhosMac);
 #else
   return 0;
@@ -282,7 +283,13 @@ int  video_terminou(void) {
 #endif
 }
 unsigned video_bufferando_ms(void) { return 0; }
-int  video_n_audio(void) { return 0; }
+int video_n_audio(void) {
+#ifdef NV_MAC_VIDEO
+  return mac_video_n_audio();
+#else
+  return 0;
+#endif
+}
 int  video_n_legenda(void) {
 #ifdef NV_MAC_VIDEO
   return mac_video_n_legenda();
@@ -290,7 +297,13 @@ int  video_n_legenda(void) {
   return 0;
 #endif
 }
-const VideoFaixa *video_audio(int i) { (void)i; return 0; }
+const VideoFaixa *video_audio(int i) {
+#ifdef NV_MAC_VIDEO
+  return mac_video_audio(i);
+#else
+  (void)i;return NULL;
+#endif
+}
 const VideoFaixa *video_legenda(int i) {
 #ifdef NV_MAC_VIDEO
   return mac_video_legenda(i);
@@ -307,7 +320,13 @@ int video_legenda_ordinal_mkv(int i) {
 }
 int  video_mkv_sondado(void) { return 2; }
 void video_sondar_mkv_agora(void) {}
-int  video_audio_atual(void) { return 0; }
+int video_audio_atual(void) {
+#ifdef NV_MAC_VIDEO
+  return mac_video_audio_atual();
+#else
+  return -1;
+#endif
+}
 int  video_legenda_atual(void) {
 #ifdef NV_MAC_VIDEO
   return mac_video_legenda_atual();
@@ -315,7 +334,13 @@ int  video_legenda_atual(void) {
   return -1;
 #endif
 }
-void video_escolher_audio(int i) { (void)i; }
+void video_escolher_audio(int i) {
+#ifdef NV_MAC_VIDEO
+  mac_video_escolher_audio(i);
+#else
+  (void)i;
+#endif
+}
 void video_escolher_legenda(int i) {
 #ifdef NV_MAC_VIDEO
   mac_video_escolher_legenda(i);

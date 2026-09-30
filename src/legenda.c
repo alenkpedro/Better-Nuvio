@@ -165,12 +165,16 @@ void legenda_bombear(void){
   if(active&&active->ass){if(rendererGeneration==g)assrender_atualizar(active->body,strlen(active->body),g);else assrender_carregar(active->body,strlen(active->body),g);}
   else assrender_limpar();rendererGeneration=g;pthread_mutex_unlock(&lock);
 }
-typedef struct{unsigned owner;char url[4096];} Request;
+typedef struct{unsigned owner;char url[4096],headers[2048];} Request;
 static void *download(void *p){Request *r=p;RedeControle ctl={.max_bytes=DOCUMENT_LIMIT};long n=0;RedeMedida measure;
-  char *bytes=rede_baixar_bin_medido_controle(r->url,15,NULL,&ctl,&n,&measure);char *utf8=bytes?legenda_decodificar(bytes,(size_t)n):NULL;free(bytes);
+  const char *headers[64];int nh=0;char *save=NULL;
+  for(char *h=strtok_r(r->headers,"\n",&save);h && nh<63;h=strtok_r(NULL,"\n",&save))headers[nh++]=h;
+  headers[nh]=NULL;
+  char *bytes=rede_baixar_bin_medido_controle(r->url,20,headers,&ctl,&n,&measure);char *utf8=bytes?legenda_decodificar(bytes,(size_t)n):NULL;free(bytes);
   Document *d=document(utf8);publish(d,r->owner,0);free(r);return NULL;
 }
-void legenda_carregar(const char *url){unsigned g=begin();Request *r=calloc(1,sizeof *r);if(!r||!url||!*url){free(r);publish(NULL,g,0);return;}r->owner=g;snprintf(r->url,sizeof r->url,"%s",url);pthread_t t;if(pthread_create(&t,NULL,download,r)){free(r);publish(NULL,g,0);}else pthread_detach(t);}
+void legenda_carregar(const char *url){legenda_carregar_headers(url,NULL);}
+void legenda_carregar_headers(const char *url,const char *headers){unsigned g=begin();Request *r=calloc(1,sizeof *r);if(!r||!url||!*url){free(r);publish(NULL,g,0);return;}r->owner=g;snprintf(r->url,sizeof r->url,"%s",url);snprintf(r->headers,sizeof r->headers,"%s",headers?headers:"");pthread_t t;if(pthread_create(&t,NULL,download,r)){free(r);publish(NULL,g,0);}else pthread_detach(t);}
 static int upper(double t){int lo=0,hi=active?active->n:0;while(lo<hi){int m=lo+(hi-lo)/2;if(active->cue[m].inicio<=t)lo=m+1;else hi=m;}return lo;}
 int legenda_cues(double pos,int delay,LegendaCue *out,int max){
   if(!out||max<=0||!isfinite(pos))return 0;double t=pos-delay/1000.0;int n=0;

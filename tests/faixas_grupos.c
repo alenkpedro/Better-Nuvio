@@ -10,6 +10,7 @@ const char *i18n(const char *s) { return s; }
 int video_n_legenda(void) { return 2; }
 int video_legenda_atual(void) { return -1; }
 int subtitle_engine_selected(void) { return -1; }
+unsigned addons_legendas_versao(void) {return 1;}
 int addons_n_legendas(void) { return nExternas; }
 const Legenda *addons_legenda(int i) { return i >= 0 && i < nExternas ? &externas[i] : NULL; }
 int stream_atual(void) { return 0; }
@@ -32,9 +33,12 @@ int main(void) {
   const char *idiomas[] = { "fr", "eng", "pob", "und", "en" };
   for (int i = 0; i < nExternas; i++)
     snprintf(externas[i].idioma, sizeof externas[i].idioma, "%s", idiomas[i]);
+  snprintf(externas[1].id,sizeof externas[1].id,"%s","translate_12852296_to_eng");
+  snprintf(externas[4].id,sizeof externas[4].id,"%s","12853151");
   montarGrupos();
+  assert(faixaDaOpcao(3,0)==6 && faixaDaOpcao(3,1)==3); // Enhanced sorts subtitle IDs
   assert(nGrupos == 5);
-  assert(!strcmp(grupos[0].nome, "Desativada"));
+  assert(!strcmp(grupos[0].nome, "Nenhuma"));
   assert(!strcmp(grupos[1].nome, "Embutidas") && grupos[1].total == 2);
   assert(!strcmp(grupos[2].codigo, "pt-br") && faixaDaOpcao(2, 0) == 4);
   assert(!strcmp(grupos[3].codigo, "en") && grupos[3].total == 2);

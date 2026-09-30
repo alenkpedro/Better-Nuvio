@@ -32,6 +32,7 @@
 #include "posplay.h"
 #include "extras.h"
 #include "video.h"
+#include "addons.h"
 #if defined(__APPLE__) && defined(NV_MAC_VIDEO)
 #include "video_mac.h"
 #endif
@@ -1143,6 +1144,14 @@ int player_aberto(void)    { return aberto; }
 int player_quer_sair(void) { return pediuSair; }
 
 static void tocarFonte(const char *url) {
+  const Stream *s=stream_item(stream_atual());
+  const CatItem *c=temFixo?&itemFixo:cat_item(idxAtual());
+  if(c && !ehCanal()) {
+    char id[96];
+    if(epT>0 && epE>0)snprintf(id,sizeof id,"%s:%d:%d",cat_id_fonte(c),epT,epE);
+    else snprintf(id,sizeof id,"%s",cat_id_fonte(c));
+    addons_buscar_legendas_fonte(id,epT>0?"series":"movie",s?s->arquivo:"",s?s->videoHash:"",s?s->videoSize:0);
+  }
   comVideo = video_tocar(url);
   if (!comVideo) erroSemVideo();
   // No PiP a fonte nova retoca o mesmo canto — o destino de tela cheia do

@@ -13,6 +13,7 @@ typedef struct {
 } LegendaCue;
 /* A positive delay displays a cue later: file time = media time - delay. */
 void legenda_carregar(const char *url);
+void legenda_carregar_headers(const char *url,const char *headers);
 void legenda_desligar(void);
 void legenda_definir_corpo(const char *corpo);
 void legenda_atualizar_corpo(const char *corpo);

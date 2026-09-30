@@ -90,10 +90,11 @@ void subtitle_engine_reset(void) {
   windowStart=windowEnd=0;failedAt=0;sourceUrl[0]=0;
   legenda_desligar();documentOwner=legenda_geracao();
 }
-void subtitle_engine_select(int embedded,const char *externalUrl) {
+void subtitle_engine_select(int embedded,const char *externalUrl) {subtitle_engine_select_headers(embedded,externalUrl,NULL);}
+void subtitle_engine_select_headers(int embedded,const char *externalUrl,const char *headers) {
   subtitle_engine_reset();selected=embedded;assrender_preaquecer();
   video_escolher_legenda(embedded);
-  if(externalUrl && *externalUrl) { selected=-2;video_escolher_legenda(-1);legenda_carregar(externalUrl);return; }
+  if(externalUrl && *externalUrl) { selected=-2;video_escolher_legenda(-1);legenda_carregar_headers(externalUrl,headers);return; }
   nativeOwner=embedded>=0;
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
   if(embedded>=0) { snprintf(sourceUrl,sizeof sourceUrl,"%s",video_url_atual()); extracting=1; }

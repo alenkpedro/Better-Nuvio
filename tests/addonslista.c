@@ -98,6 +98,7 @@ const char *ling_legenda2(void) { return "en"; }
 int ling_casa(const char *a, const char *b) { return !*b || !strcasecmp(a,b); }
 int ling_legenda_visivel(const char *codigo) { (void)codigo; return 1; }
 const char *ling_nome(const char *s) { return s; }
+const char *ling_grupo_codigo(const char *s) {return !strcasecmp(s,"pt-BR")?"pt-br":s;}
 const char *rede_url_publica(const char *url, char *dst, unsigned tam) {
   snprintf(dst, tam, "%s", url ? url : ""); return dst; }
 void marco(const char *s) { (void)s; }
@@ -279,11 +280,10 @@ int main(void) {
     addons_base_por_id("app.xperience.11111111-1111-1111-1111-111111111111"),
     "https://addon-1.test");
 
-  // 16 provedores retornam 20 legendas cada. A lista global comporta 256 e
-  // distribui rodadas: o ultimo provedor tambem precisa aparecer.
+  // All 20 results from each of the 16 subtitle providers must survive.
   addons_buscar_legendas("tt1234567", "movie");
   for (int espera = 0; espera < 3000 && !addons_legendas_prontas(); espera++) usleep(1000);
-  conferir("legendas de multiplos provedores", addons_n_legendas(), LEG_MAX);
+  conferir("legendas de multiplos provedores", addons_n_legendas(), 16*20);
   { int viuUltimo = 0, viuNome = 0, viuFps = 0, viuFallback = 0, viuSemNome = 0;
     for (int j = 0; j < addons_n_legendas(); j++) {
       const Legenda *l = addons_legenda(j);

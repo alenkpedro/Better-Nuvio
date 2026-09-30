@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <math.h>
 
 typedef struct { int x, y, w, h; } Rect;
@@ -40,6 +41,10 @@ static unsigned char *upload;
 static size_t uploadTam;
 static SDL_AudioDeviceID audioDev;
 static atomic_int volumePct = 100;
+static VideoFaixa audioFaixas[NV_FAIXA_MAX];
+static int audioStreams[NV_FAIXA_MAX], nAudio, audioAtual=-1;
+static atomic_int audioPedido=-1, audioAplicado=-1;
+static char audioPreferido[16];
 static VideoFaixa legFaixas[NV_FAIXA_MAX];
 static int legStreams[NV_FAIXA_MAX], nLeg, legAtual = -1;
 static atomic_int legStreamSelecionado = -1;
@@ -75,6 +80,58 @@ static void listarLegendas(const AVFormatContext *fmt) {
   memcpy(legStreams, streams, (size_t)n * sizeof streams[0]);
   nLeg = n;
   pthread_mutex_unlock(&mu);
+}
+
+static const char *audioFamily(const char *lang) {
+  static const struct {const char *code,*family;} aliases[]={
+    {"por","pt"},{"pob","pt"},{"eng","en"},{"spa","es"},{"fra","fr"},{"fre","fr"},
+    {"deu","de"},{"ger","de"},{"ita","it"},{"jpn","ja"},{"kor","ko"},{"zho","zh"},
+    {"chi","zh"},{"rus","ru"},{"ara","ar"},{"hin","hi"},{"nld","nl"},{"dut","nl"},
+    {"swe","sv"},{"nor","no"},{"dan","da"},{"fin","fi"},{"pol","pl"},{"tur","tr"},
+    {"heb","he"},{"tha","th"},{"ces","cs"},{"cze","cs"},{"ell","el"},{"gre","el"},
+    {"hun","hu"},{"ron","ro"},{"rum","ro"},{"ukr","uk"},{"vie","vi"},{"ind","id"}
+  };
+  for(size_t i=0;i<sizeof aliases/sizeof *aliases;i++)if(!strcasecmp(lang,aliases[i].code))return aliases[i].family;
+  static _Thread_local char families[2][16];static _Thread_local unsigned turn;
+  char *out=families[turn++&1];snprintf(out,16,"%s",lang);char *sep=strpbrk(out,"-_");if(sep)*sep=0;return out;
+}
+static int listarAudio(const AVFormatContext *fmt,int best) {
+  VideoFaixa faixas[NV_FAIXA_MAX]={{0}};int streams[NV_FAIXA_MAX],n=0,selected=-1,preferred=-1;
+  for(unsigned i=0;i<fmt->nb_streams && n<NV_FAIXA_MAX;i++) {
+    const AVStream *s=fmt->streams[i];
+    if(s->codecpar->codec_type!=AVMEDIA_TYPE_AUDIO)continue;
+    AVDictionaryEntry *lang=av_dict_get(s->metadata,"language",NULL,0);
+    AVDictionaryEntry *title=av_dict_get(s->metadata,"title",NULL,0);
+    snprintf(faixas[n].idioma,sizeof faixas[n].idioma,"%s",lang?lang->value:"und");
+    snprintf(faixas[n].rotulo,sizeof faixas[n].rotulo,"%s",title?title->value:"");
+    if(!faixas[n].rotulo[0])snprintf(faixas[n].rotulo,sizeof faixas[n].rotulo,"Áudio %d",n+1);
+    snprintf(faixas[n].codec,sizeof faixas[n].codec,"%s",avcodec_get_name(s->codecpar->codec_id));
+    faixas[n].numero=(int)i;streams[n]=(int)i;
+    if((int)i==best)selected=n;
+    if(preferred<0 && audioPreferido[0] && !strcasecmp(audioFamily(audioPreferido),audioFamily(faixas[n].idioma)))preferred=n;
+    n++;
+  }
+  if(preferred>=0)selected=preferred;
+  if(selected<0 && n)selected=0;
+  pthread_mutex_lock(&mu);
+  memcpy(audioFaixas,faixas,(size_t)n*sizeof faixas[0]);memcpy(audioStreams,streams,(size_t)n*sizeof streams[0]);
+  nAudio=n;audioAtual=-1;
+  pthread_mutex_unlock(&mu);
+  return selected>=0?streams[selected]:-1;
+}
+static SwrContext *converterAudio(AVCodecContext *ac) {
+  SwrContext *swr=NULL;AVChannelLayout stereo;
+  av_channel_layout_default(&stereo,2);
+  int rc=swr_alloc_set_opts2(&swr,&stereo,AV_SAMPLE_FMT_S16,48000,
+                            &ac->ch_layout,ac->sample_fmt,ac->sample_rate,0,NULL);
+  av_channel_layout_uninit(&stereo);
+  if(rc<0 || swr_init(swr)<0)swr_free(&swr);
+  return swr;
+}
+static void audioConfirmar(int stream) {
+  pthread_mutex_lock(&mu);audioAtual=-1;
+  for(int i=0;i<nAudio;i++)if(audioStreams[i]==stream){audioAtual=i;break;}
+  pthread_mutex_unlock(&mu);atomic_store(&audioAplicado,stream);
 }
 
 static const char *textoAss(const char *s) {
@@ -171,7 +228,7 @@ static int controle(void) {
   seek = seekPendente;
   pthread_mutex_unlock(&mu);
   if (audioDev) SDL_PauseAudioDevice(audioDev, p);
-  return seek || atomic_load(&pararFio) ? 1 : p ? 2 : 0;
+  return seek || atomic_load(&pararFio) || atomic_load(&audioPedido)!=atomic_load(&audioAplicado) ? 1 : p ? 2 : 0;
 }
 
 static double instanteQuadro(const AVFrame *f, const AVStream *s) {
@@ -269,8 +326,10 @@ static void *decodificar(void *u) {
     erro("video indisponivel", vi < 0 ? vi : AVERROR_DECODER_NOT_FOUND);
     goto fim;
   }
-  ai = av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
+  ai = listarAudio(fmt,av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0));
   if (ai >= 0) ac = abrirCodec(fmt->streams[ai]);
+  if(!ac)ai=-1;
+  atomic_store(&audioPedido,ai);audioConfirmar(ai);
   ow = vc->width; oh = vc->height;
   if (ow < 1 || oh < 1) { erro("dimensoes", AVERROR_INVALIDDATA); goto fim; }
   double escala = fmin(1.0, fmin(1920.0 / ow, 1080.0 / oh));
@@ -288,14 +347,7 @@ static void *decodificar(void *u) {
     want.samples = 4096;
     audioDev = SDL_OpenAudioDevice(NULL, 0, &want, NULL, 0);
     if (audioDev) {
-      AVChannelLayout stereo;
-      av_channel_layout_default(&stereo, 2);
-      if (swr_alloc_set_opts2(&swr, &stereo, AV_SAMPLE_FMT_S16, 48000,
-                              &ac->ch_layout, ac->sample_fmt,
-                              ac->sample_rate, 0, NULL) < 0 || swr_init(swr) < 0) {
-        swr_free(&swr);
-      }
-      av_channel_layout_uninit(&stereo);
+      swr=converterAudio(ac);
       SDL_PauseAudioDevice(audioDev, 0);
     }
   }
@@ -309,6 +361,16 @@ static void *decodificar(void *u) {
   if (!quadro) { erro("quadro", AVERROR(ENOMEM)); goto fim; }
 
   while (!atomic_load(&pararFio)) {
+    int wanted=atomic_load(&audioPedido);
+    if(wanted!=ai) {
+      AVCodecContext *next=wanted>=0 && wanted<(int)fmt->nb_streams?abrirCodec(fmt->streams[wanted]):NULL;
+      SwrContext *resampler=next?converterAudio(next):NULL;
+      if(next && resampler) {
+        avcodec_free_context(&ac);swr_free(&swr);ac=next;swr=resampler;ai=wanted;
+        if(audioDev)SDL_ClearQueuedAudio(audioDev);
+        audioConfirmar(ai);
+      } else {avcodec_free_context(&next);swr_free(&resampler);atomic_store(&audioPedido,ai);}
+    }
     int fazSeek = 0; double alvo = 0;
     pthread_mutex_lock(&mu);
     if (seekPendente) {
@@ -412,7 +474,8 @@ void mac_video_parar(void) {
   duracao = baseSeg = 0;
   quadroSeq = quadroEnviado = 0;
   seekPendente = 0;
-  nLeg = legNCues = 0; legAtual = -1;
+  nLeg = legNCues = nAudio = 0; legAtual = audioAtual = -1;
+  atomic_store(&audioPedido,-1);atomic_store(&audioAplicado,-1);
   atomic_store(&legStreamSelecionado, -1);
   free(quadro); quadro = NULL;
   pthread_mutex_unlock(&mu);
@@ -458,6 +521,26 @@ void mac_video_volume(int pct) {
   if (pct < 0) pct = 0;
   if (pct > 100) pct = 100;
   atomic_store(&volumePct, pct);
+}
+
+void mac_video_preferir_audio(const char *language) {
+  snprintf(audioPreferido,sizeof audioPreferido,"%s",language?language:"");
+}
+int mac_video_n_audio(void) {pthread_mutex_lock(&mu);int n=nAudio;pthread_mutex_unlock(&mu);return n;}
+const VideoFaixa *mac_video_audio(int i) {
+  static _Thread_local VideoFaixa copy;const VideoFaixa *r=NULL;
+  pthread_mutex_lock(&mu);if(i>=0 && i<nAudio){copy=audioFaixas[i];r=&copy;}pthread_mutex_unlock(&mu);return r;
+}
+int mac_video_audio_atual(void) {pthread_mutex_lock(&mu);int i=audioAtual;pthread_mutex_unlock(&mu);return i;}
+void mac_video_escolher_audio(int i) {
+  pthread_mutex_lock(&mu);
+  if(i>=0 && i<nAudio && audioAtual!=i) {
+    seekSeg=relogio();seekPendente=1;
+    /* Switching decoders seeks to the same media position, including paused
+     * playback, rather than continuing at the demuxer's lookahead position. */
+    atomic_store(&audioPedido,audioStreams[i]);
+  }
+  pthread_mutex_unlock(&mu);
 }
 
 int mac_video_n_legenda(void) {

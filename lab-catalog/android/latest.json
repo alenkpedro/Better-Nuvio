@@ -1,12 +1,12 @@
 {
-  "tag_name": "v0.1.27",
-  "body": "## Continuar assistindo completo\n- Histórico da conta Nuvio completo, sem os cortes de 50 cards e 64 candidatos na montagem.\n- A fileira começa com 12 títulos e libera os próximos 12 ao chegar ao fim, até o último título disponível.\n- Contador com o total completo e renderização dos cards próximos à tela para manter a navegação leve.\n- A posição segue o título quando o histórico atualiza; próximos episódios também usam paginação.\n- Testado no Mac com 137 títulos, D-pad real, restauração, publicação e sanitizadores de memória.\n",
+  "tag_name": "v0.1.28",
+  "body": "## Legendas como no Nuvio Enhanced\n- Nome do addon em um selo pequeno, idioma na linha principal e identificador ou nome do arquivo abaixo.\n- Opções ordenadas pela informação da legenda, como no Enhanced.\n- Nomes completos de idioma são interpretados antes do agrupamento: “Make Portuguese (Brazilian)” entra em Português (Brasil).\n- Consulta inclui nome, hash e tamanho exato do arquivo quando o addon fornece esses dados.\n- Listas maiores por provedor e cabeçalhos necessários ao download são preservados.\n- O player de teste no Mac lista e permite trocar as faixas reais de áudio, mantendo a posição e a pausa.\n",
   "assets": [
     {
-      "name": "better-nuvio-android-tv-0.1.27-firetv-4k-max-2-debug.apk",
-      "size": 39021644,
-      "digest": "sha256:f05a374ec81347d82a87373edf6ad26c8e3ecb888cfdcf5b18521e859676bb38",
-      "browser_download_url": "https://betternuvio.vercel.app/better-nuvio-android-tv-0.1.27-firetv-4k-max-2-debug.apk"
+      "name": "better-nuvio-android-tv-0.1.28-firetv-4k-max-2-debug.apk",
+      "size": 41169023,
+      "digest": "sha256:ae82d1832b1cf233f1d39508d8709e63cc950a0a21d673fae885649f10e4034c",
+      "browser_download_url": "https://betternuvio.vercel.app/better-nuvio-android-tv-0.1.28-firetv-4k-max-2-debug.apk"
     }
   ]
 }

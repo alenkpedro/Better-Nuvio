@@ -14,13 +14,16 @@
 #include "catalogo.h"
 #include "streams.h"
 #include "subtitle_match.h"
+#include "subtitle_catalog.h"
 #include "linguas.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <math.h>
 
 // O painel webOS do Enhanced mede 640px e fica a 64px da borda direita.
 #define FX_LINHA   76.0f
+#define FX_OPCAO   104.0f
 #define FX_X       1216.0f
 #define FX_W       640.0f
 #define FX_MAX_GRUPOS (LEG_MAX + 2)
@@ -68,6 +71,7 @@ static void corFocoFaixa(float *r, float *g, float *b) {
 // reabria com o foco no lugar errado — a legenda certa tocava, so a folha
 // mentia sobre qual era.
 static int legExterna = -1;
+static char legExternaUrl[4096],legExternaProvider[64];
 
 static int legAuto;
 static Uint32 legAutoDesde;
@@ -80,10 +84,17 @@ int faixas_legenda_embutida_na_tv(void) {
 #endif
 }
 void faixas_reiniciar(void) {
-  legExterna=-1;aberta=syncFala=0;legAuto=1;legAutoDesde=0;
+  legExterna=-1;legExternaUrl[0]=0;aberta=syncFala=0;legAuto=1;legAutoDesde=0;
   subtitle_engine_reset();
 }
 static int legendaAtiva(void) {
+  if(legExternaUrl[0]) {
+    for(int i=0;i<addons_n_legendas();i++) {
+      const Legenda *l=addons_legenda(i);
+      if(l && !strcmp(l->url,legExternaUrl) && !strcmp(l->provedor,legExternaProvider))return video_n_legenda()+i;
+    }
+    return -1; // pending lookup must not mark an unrelated option as active
+  }
   if(legExterna>=0)return legExterna;
   int selected=subtitle_engine_selected();
   return selected>=0?selected:video_legenda_atual();
@@ -97,7 +108,14 @@ static int modo;
 
 typedef struct { char codigo[32]; char nome[72]; int total; } FxGrupo;
 static FxGrupo grupos[FX_MAX_GRUPOS];
-static int nGrupos;
+static int nGrupos, ordemLeg[LEG_MAX], ordemN;
+static unsigned ordemVersao=(unsigned)-1;
+static int compararOpcao(const void *a,const void *b) {
+  int x=*(const int *)a,y=*(const int *)b;
+  const Legenda *l=addons_legenda(x),*r=addons_legenda(y);
+  int n=l && r?subtitle_option_compare(l,r):0;
+  return n?n:x-y;
+}
 static int evidenciaLegenda(int indice) {
   const Stream *s = stream_item(stream_atual());
   const Legenda *l = addons_legenda(indice);
@@ -131,12 +149,19 @@ static int prioridadeGrupo(const FxGrupo *grupo) {
 }
 
 static void montarGrupos(void) {
+  unsigned versao=addons_legendas_versao();
+  int total=addons_n_legendas();if(total>LEG_MAX)total=LEG_MAX;
+  if(versao!=ordemVersao || total!=ordemN) {
+    ordemVersao=versao;ordemN=total;
+    for(int i=0;i<total;i++)ordemLeg[i]=i;
+    qsort(ordemLeg,(size_t)total,sizeof ordemLeg[0],compararOpcao);
+  }
   char focoAnterior[32] = "";
   if (focoIdioma >= 0 && focoIdioma < nGrupos)
     snprintf(focoAnterior, sizeof focoAnterior, "%s", grupos[focoIdioma].codigo);
   nGrupos = 1;
   memset(grupos, 0, sizeof grupos);
-  snprintf(grupos[0].nome, sizeof grupos[0].nome, "%s", i18n("Desativada"));
+  snprintf(grupos[0].nome, sizeof grupos[0].nome, "%s", i18n("Nenhuma"));
   if (video_n_legenda() > 0) {
     snprintf(grupos[1].codigo, sizeof grupos[1].codigo, "embedded");
     snprintf(grupos[1].nome, sizeof grupos[1].nome, "%s", i18n("Embutidas"));
@@ -214,8 +239,8 @@ static int faixaDaOpcao(int grupo, int opcao) {
   if (grupo <= 0 || grupo >= nGrupos) return -1;
   if (video_n_legenda() > 0 && grupo == 1)
     return opcao >= 0 && opcao < video_n_legenda() ? opcao : -1;
-  for (int j = 0; j < addons_n_legendas(); j++) {
-    int i = video_n_legenda() + j;
+  for (int j = 0; j < ordemN; j++) {
+    int i = video_n_legenda() + ordemLeg[j];
     if (grupoDaFaixa(i) != grupo) continue;
     if (opcao-- == 0) return i;
   }
@@ -362,10 +387,10 @@ static const char *rotuloLegenda(int i,const char **marca) {
   const Legenda *l=addons_legenda(i-embedded);*marca=l&&l->provedor[0]?l->provedor:i18n("Legenda");return l?l->rotulo:"";
 }
 static void escolherLegenda(int i) {
-  player_leg_sincronizacao_limpar();legExterna=-1;
+  player_leg_sincronizacao_limpar();legExterna=-1;legExternaUrl[0]=0;
   if(i>=video_n_legenda()) {
     const Legenda *l=addons_legenda(i-video_n_legenda());
-    if(l&&l->url[0]){legExterna=i;subtitle_engine_select(-1,l->url);}
+    if(l&&l->url[0]){legExterna=i;snprintf(legExternaUrl,sizeof legExternaUrl,"%s",l->url);snprintf(legExternaProvider,sizeof legExternaProvider,"%s",l->provedor);subtitle_engine_select_headers(-1,l->url,l->cabecalhos);}
   } else subtitle_engine_select(i,NULL);
 }
 
@@ -654,7 +679,7 @@ void faixas_desenhar(Uint32 agora) {
   ativoGrupo = grupoDaFaixa(legendaAtiva());
   if (focoIdioma >= nGrupos) focoIdioma = nGrupos - 1;
   if (modo) h = paginaEstilo || focoIdioma > 0 ? 850 : 152 + nGrupos*FX_LINHA;
-  else h = paginaMix ? 340 : 260 + (nAudio > 2 ? (nAudio-2)*FX_LINHA : 0);
+  else h = paginaMix ? 340 : fmaxf(260,152+nAudio*FX_LINHA);
   if (h > (modo ? 850 : 720)) h = modo ? 850 : 720;
   y = 1024 - h;
   gfx_cor((GfxRect){0,0,NV_TELA_W,NV_TELA_H},0,0,0,0,.58f*a);
@@ -768,18 +793,23 @@ void faixas_desenhar(Uint32 agora) {
   float linguaH = linguaVis*FX_LINHA;
   gfx_recorte(contentX,inicio,contentW,linguaH);
   for (int g = rolagemIdioma; g < nGrupos && g < rolagemIdioma+linguaVis; g++) {
-    char sub[64];
-    if (g) snprintf(sub,sizeof sub,i18n("%d faixa(s)"),grupos[g].total);
-    else sub[0]=0;
-    linhaPainel(contentX,inicio+(g-rolagemIdioma)*FX_LINHA,contentW,
-                grupos[g].nome,sub,!focoCabecalho && !focoOpcoes && focoIdioma==g,
-                g==ativoGrupo,0,-1,a);
+    float rowY=inicio+(g-rolagemIdioma)*FX_LINHA;
+    linhaPainel(contentX,rowY,contentW,grupos[g].nome,"",
+                !focoCabecalho && !focoOpcoes && focoIdioma==g,g==ativoGrupo,0,-1,a);
+    if(g) {
+      char count[16];snprintf(count,sizeof count,"%d",grupos[g].total);
+      TxtLinha name=txt_linha(TXT_BODY,grupos[g].nome,245,245,245,255);
+      TxtLinha badge=txt_linha(TXT_PG_FIM,count,200,200,200,255);
+      float bx=fminf(contentX+22+name.w+12,contentX+contentW-92);
+      gfx_cor((GfxRect){bx,rowY+23,badge.w+14,24},.2f,1,1,1,.09f*a);
+      txt_desenhar_alpha(badge,bx+7,rowY+22,a);
+    }
   }
   gfx_sem_recorte();
   if (focoIdioma <= 0) return;
   float optsY = inicio+linguaH+28;
   gfx_cor((GfxRect){contentX+8,optsY-14,contentW-16,1},0,1,1,1,.14f*a);
-  int optsVis = (int)((fim-optsY)/FX_LINHA);
+  int optsVis = (int)((fim-optsY)/FX_OPCAO);
   if (optsVis < 1) optsVis = 1;
   if (focoOpcao >= grupos[focoIdioma].total) focoOpcao = grupos[focoIdioma].total-1;
   if (focoOpcao < 0) focoOpcao = 0;
@@ -791,9 +821,33 @@ void faixas_desenhar(Uint32 agora) {
     const char *marca = NULL, *rot = rotuloLegenda(i,&marca);
     if (!marca) marca = i < video_n_legenda() ? i18n("Incorporada") : "OpenSubtitles";
     int recomendado = i == melhor;
-    linhaPainel(contentX,optsY+(o-rolagemOpcao)*FX_LINHA,contentW,
-                rot,marca,!focoCabecalho && focoOpcoes && focoOpcao==o,
-                i==legendaAtiva(),0,recomendado,a);
+    float optionY=optsY+(o-rolagemOpcao)*FX_OPCAO;
+    if(i<video_n_legenda()) {
+      linhaPainel(contentX,optionY,contentW,rot,marca,
+                  !focoCabecalho && focoOpcoes && focoOpcao==o,i==legendaAtiva(),0,recomendado,a);
+    } else {
+      const Legenda *l=addons_legenda(i-video_n_legenda());
+      int focused=!focoCabecalho && focoOpcoes && focoOpcao==o,active=i==legendaAtiva();
+      float fr,fg,fb;corFocoFaixa(&fr,&fg,&fb);
+      GfxRect box={contentX,optionY,contentW,FX_OPCAO-6};
+      if(focused){gfx_cor(box,.2f,fr,fg,fb,a);gfx_anel(box,.2f,2,fr,fg,fb,a);}
+      else if(active)gfx_cor(box,.2f,fr,fg,fb,.13f*a);
+      int c=focused?ajustes_tinta_foco():245,secondary=focused?ajustes_tinta_foco2():170;
+      float width=contentW-(active?76:44);
+      TxtLinha provider=txt_linha_corta(TXT_PG_FIM,marca,secondary,secondary,secondary,255,width-16);
+      gfx_cor((GfxRect){contentX+22,optionY+7,provider.w+16,26},.18f,1,1,1,.09f*a);
+      txt_desenhar_alpha(provider,contentX+30,optionY+8,a);
+      txt_desenhar_alpha(txt_linha_corta(TXT_BODY,rot,c,c,c,255,width),contentX+22,optionY+34,a);
+      txt_desenhar_alpha(txt_linha_corta(TXT_PG_FIM,l?subtitle_metadata(l):"",secondary,secondary,secondary,255,
+                                       width-(recomendado?152:0)),contentX+22,optionY+68,a);
+      if(recomendado) {
+        GfxRect badge={contentX+contentW-(active?202:164),optionY+60,142,32};
+        gfx_cor(badge,.24f,.10f,.75f,.24f,.24f*a);gfx_anel(badge,.24f,1,.14f,.94f,.35f,.82f*a);
+        TxtLinha label=txt_linha(TXT_PG_ROTULO,i18n("Recomendada"),130,244,160,255);
+        txt_desenhar_alpha(label,badge.x+(badge.w-label.w)*.5f,badge.y+2,a);
+      }
+      if(active)txt_desenhar_alpha(txt_linha(TXT_BODY,"✓",c,c,c,255),contentX+contentW-43,optionY+37,a);
+    }
   }
   gfx_sem_recorte();
 }

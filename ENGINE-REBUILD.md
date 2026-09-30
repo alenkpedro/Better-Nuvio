@@ -83,3 +83,26 @@ do framebuffer. O comportamento nas TVs ainda depende do teste físico.
 O histórico da conta Nuvio passa inteiro pela seleção e ordenação. Foram removidos os cortes de 50 cards no snapshot e 64 candidatos na montagem. A Home começa com 12 cards e libera os próximos 12 ao chegar ao fim, até o último título disponível. O contador mostra o total completo; a renderização mantém só os cards próximos à tela ativos. A posição acompanha a identidade do título quando o histórico atualiza. A fileira de próximos episódios usa a mesma paginação.
 
 Verificação: 137 títulos, todos os modos de ordenação, publicação assíncrona, passagem pelas fronteiras de página, último card, restauração após reordenação e 70 próximos episódios, com AddressSanitizer e UndefinedBehaviorSanitizer no Mac. Renderização real verificada com D-pad nos cards 12, 65 e 137, sem erros GL.
+
+## Menu de legendas e áudio — IPK 1.5.36 / APK 0.1.28
+
+A consulta e a apresentação seguem o `subtitleRepository` e os métodos 49/50
+do Nuvio Enhanced WebOS. O nome do addon aparece no selo, o idioma como título
+e o ID original como informação secundária. Nomes de idioma completos são
+normalizados antes do filtro; IDs iguais ao idioma não são repetidos. Opções
+ficam na ordem do ID, preservando a ordem de origem em empates.
+
+O pedido inclui `videoHash`, `videoSize` e `filename` quando fornecidos pela
+fonte. Uma troca de arquivo refaz a busca e invalida respostas antigas. O
+limite de 32 resultados por addon foi removido; o catálogo tem um teto de
+proteção de 1024 opções. Headers de download também são preservados.
+
+No Mac, o backend FFmpeg enumera as faixas de áudio e troca o decoder e o
+resampler na posição atual, inclusive durante a pausa. LG e Android continuam
+usando suas listas e seleções nativas.
+
+Verificações: respostas capturadas e anonimizadas de Idiotas (17 opções PT-BR),
+80 opções de um mesmo addon, URL com os três hints, invalidação por fonte,
+headers, ordenação e badge único. Reprodução de duas faixas AAC (440/880 Hz)
+confirma o áudio decodificado após cada troca. SRT e ASS continuam surgindo em
+2,100 s do vídeo com erro medido abaixo de 4 ms nos arquivos de teste.
