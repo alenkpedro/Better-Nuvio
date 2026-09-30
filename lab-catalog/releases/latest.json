@@ -1,12 +1,12 @@
 {
-  "tag_name": "v1.5.34",
-  "body": "## Navegação com vidro\n- Cápsula compacta de ícones que se expande a partir do centro com mouse ou foco do controle remoto.\n- Nomes revelados junto com a largura da barra e destaque suave entre destinos.\n- Transparência com desfoque real da imagem atrás do menu, luz discreta no topo e borda fina.\n- Cliques mantêm o menu aberto enquanto o cursor está sobre ele; setas retomam o foco do controle.\n- Preserva os novos motores de legendas e continuar assistindo da atualização anterior.\n- Verificado no Mac com renderização real, mouse, D-pad, movimento reduzido e mudança de resolução.\n",
+  "tag_name": "v1.5.35",
+  "body": "## Continuar assistindo completo\n- Histórico da conta Nuvio completo, sem os cortes de 50 cards e 64 candidatos na montagem.\n- A fileira começa com 12 títulos e libera os próximos 12 ao chegar ao fim, até o último título disponível.\n- Contador com o total completo e renderização dos cards próximos à tela para manter a navegação leve.\n- A posição segue o título quando o histórico atualiza; próximos episódios também usam paginação.\n- Testado no Mac com 137 títulos, D-pad real, restauração, publicação e sanitizadores de memória.\n",
   "assets": [
     {
-      "name": "com.betternuvio.app_1.5.34_arm.ipk",
-      "size": 52084320,
-      "digest": "sha256:681ded796392b3274ed0f020c01793b36dc0ffe8928dc17bd66072503faf37ff",
-      "browser_download_url": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.34_arm.ipk"
+      "name": "com.betternuvio.app_1.5.35_arm.ipk",
+      "size": 52084184,
+      "digest": "sha256:1cb0380c0b1999aad02a99164753f0a86bdbbbae02208925543954fba3d3da02",
+      "browser_download_url": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.35_arm.ipk"
     }
   ]
 }

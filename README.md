@@ -18,7 +18,7 @@ O IPK não é enviado ao GitHub. Por isso, o `vercel.json` da raiz desativa a im
 
 ## Código-fonte
 
-Este repositório é um snapshot limpo do código atual do Better Nuvio. Ele não contém o histórico Git local, chaves, tokens, contas, configurações pessoais, pacotes IPK ou binários gerados. O IPK 1.5.34 é publicado pelo catálogo. O segredo OAuth do Trakt fica apenas no ambiente do servidor; o Seekr usa uma chave pessoal configurada no dispositivo.
+Este repositório é um snapshot limpo do código atual do Better Nuvio. Ele não contém o histórico Git local, chaves, tokens, contas, configurações pessoais, pacotes IPK ou binários gerados. O IPK 1.5.35 é publicado pelo catálogo. O segredo OAuth do Trakt fica apenas no ambiente do servidor; o Seekr usa uma chave pessoal configurada no dispositivo.
 
 Os componentes principais estão em `src/` (cliente nativo), `deploy/app/` (recursos), `plugin-service/` (executor local), `tools/` (build) e `tests/`. Para compilar no Mac, use `bash tools/mac.sh`; para LG, `bash tools/arm.sh --ipk`. Consulte [as notas de compilação](docs/ORIGINAL_BUILD_NOTES.md) para dependências e variáveis locais. Os arquivos de conta são criados localmente e não são distribuídos.
 
@@ -34,4 +34,4 @@ Os avisos de atribuição estão em [NOTICE.md](NOTICE.md). Better Nuvio é um p
 
 ## Motores refeitos
 
-A reconstrução de legendas e continuar assistindo está documentada em [ENGINE-REBUILD.md](ENGINE-REBUILD.md). APK 0.1.26 e IPK 1.5.34 usam o mesmo núcleo novo.
+A reconstrução de legendas e continuar assistindo está documentada em [ENGINE-REBUILD.md](ENGINE-REBUILD.md). APK 0.1.27 e IPK 1.5.35 usam o mesmo núcleo novo.

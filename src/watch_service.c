@@ -18,7 +18,7 @@
 #include <ctype.h>
 
 static pthread_mutex_t snapshotMu=PTHREAD_MUTEX_INITIALIZER;
-static CatItem snapshot[CW_SERVICE_LIMIT];
+static CatItem *snapshot;
 static int snapshotCount,snapshotProfile,snapshotSource,running,readyProfile,readySource;
 static unsigned requested,revision,applied,readyAddons,lastRepo,lastAddons;
 static int lastProfile,lastSource;
@@ -31,9 +31,11 @@ static int cw_cached_identity(int profile,const char *id,CatItem *out) {
 }
 static void cw_stage(const CatItem *cards,int n,int profile,int source) {
   if(profile!=perfis_ativo() || source!=ajustes_cw_fonte())return;
-  if(n>CW_SERVICE_LIMIT)n=CW_SERVICE_LIMIT;
+  CatItem *copy=n>0?malloc((size_t)n*sizeof *copy):NULL;
+  if(n>0 && !copy)return;
+  if(n>0)memcpy(copy,cards,(size_t)n*sizeof *copy);
   pthread_mutex_lock(&snapshotMu);
-  memcpy(snapshot,cards,(size_t)n*sizeof *cards);snapshotCount=n;snapshotProfile=profile;snapshotSource=source;revision++;
+  free(snapshot);snapshot=copy;snapshotCount=n;snapshotProfile=profile;snapshotSource=source;revision++;
   pthread_mutex_unlock(&snapshotMu);
 }
 /* Metadata has no authority over progress, episode coordinates or identity. */
@@ -54,8 +56,14 @@ static int cw_metadata(const char *m,const char *type,CatItem *item) {
   snprintf(item->backdropCatalogo,sizeof item->backdropCatalogo,"%s",item->backdrop);
   seriealias_aplicar(item);return 1;
 }
-#define CONT_MAX CW_SERVICE_LIMIT
 #define CW_CANDIDATES 64
+
+static int cw_capacity(int profile,int source) {
+  int n=(source==AJ_CWF_CONTA || source==AJ_CWF_AMBAS)?prog_ler_perfil(profile,NULL,PROG_MAX):0;
+  if(source==AJ_CWF_TRAKT || source==AJ_CWF_AMBAS)n+=CW_CANDIDATES;
+  if(source==AJ_CWF_SIMKL || source==AJ_CWF_AMBAS)n+=CW_CANDIDATES;
+  return n>0?n:1;
+}
 
 typedef struct { CwEstado state; CatItem item; int ready, profile, cachedFollowing; } CwCard;
 
@@ -163,10 +171,11 @@ static void *cw_enrichment_worker(void *arg) {
   return NULL;
 }
 int cw_service_build(CatItem *out,int max,unsigned char *localized) {
+  if(!out || max<1)return 0;
   int profile=perfis_ativo(),source=ajustes_cw_fonte();unsigned revision=prog_revisao();
   ProgRegistro *records=calloc(PROG_MAX,sizeof *records);CwEstado *states=calloc(PROG_MAX+128,sizeof *states);
-  CatItem *provider=calloc(CW_CANDIDATES,sizeof *provider);CwCard *cards=calloc(CW_CANDIDATES,sizeof *cards);
-  if(!records||!states||!provider||!cards){free(records);free(states);free(provider);free(cards);return 0;}
+  CatItem *provider=calloc(CW_CANDIDATES,sizeof *provider);
+  if(!records||!states||!provider){free(records);free(states);free(provider);return 0;}
   int n=0;
   if(source==AJ_CWF_AMBAS || source==AJ_CWF_CONTA) {
     int nr=prog_ler_perfil(profile,records,PROG_MAX);
@@ -187,16 +196,24 @@ int cw_service_build(CatItem *out,int max,unsigned char *localized) {
       if(state->seguinte)cwo_marcar_estreia(r->contentId,cwo_estreia(it->imdb));
     }
   }
-  int selected[CW_CANDIDATES];int nc=cw_selecionar(states,n,selected,CW_CANDIDATES),k=0;
+  int *selected=calloc(n?n:1,sizeof *selected);
+  if(!selected){free(records);free(states);free(provider);return 0;}
+  int nc=cw_selecionar(states,n,selected,n),k=0;
+  CwCard *cards=calloc(nc?nc:1,sizeof *cards);
+  if(!cards){free(selected);free(records);free(states);free(provider);return 0;}
   for(int i=0;i<nc;i++) {
     cards[i].state=states[selected[i]];cards[i].profile=profile;cards[i].ready=1;cw_project(&cards[i]);cw_cached(&cards[i]);
     if(!localized && k<max && (cw_estado_visivel(&cards[i].state) || cards[i].cachedFollowing) && !prog_removido_vence(cards[i].item.imdb,cards[i].item.retomadoMs))out[k++]=cards[i].item;
   }
   if(!localized && profile==perfis_ativo() && revision==prog_revisao() && source==ajustes_cw_fonte())cw_stage(out,k,profile,source);
+  free(selected);free(records);free(states);free(provider);
   CwEnrichment job={.cards=cards,.n=nc,.mu=PTHREAD_MUTEX_INITIALIZER};pthread_t threads[3];int nt=0;
   for(int i=0;i<3 && i<nc;i++)if(!pthread_create(&threads[nt],NULL,cw_enrichment_worker,&job))nt++;
   cw_enrichment_worker(&job);for(int i=0;i<nt;i++)pthread_join(threads[i],NULL);pthread_mutex_destroy(&job.mu);
-  CwoItem ordering[CW_CANDIDATES];int permutation[CW_CANDIDATES];const char *future[CW_CANDIDATES];int nf=0,valid=0;
+  CwoItem *ordering=calloc(nc?nc:1,sizeof *ordering);
+  int *permutation=calloc(nc?nc:1,sizeof *permutation);
+  const char **future=calloc(nc?nc:1,sizeof *future);int nf=0,valid=0;
+  if(!ordering||!permutation||!future){free(ordering);free(permutation);free(future);free(cards);return 0;}
   long long now=prog_agora_ms();
   for(int i=0;i<nc;i++) {
     if(!cards[i].ready || prog_removido_vence(cards[i].item.imdb,cards[i].item.retomadoMs))continue;
@@ -211,29 +228,31 @@ int cw_service_build(CatItem *out,int max,unsigned char *localized) {
     if(cwo_futuro(&ordering[at],now))future[nf++]=out[k].imdb;k++;
   }
   cwo_publicar_futuros(future,nf);
-  free(records);free(states);free(provider);free(cards);
+  free(ordering);free(permutation);free(future);free(cards);
   if(profile!=perfis_ativo() || revision!=prog_revisao() || source!=ajustes_cw_fonte())return -1;
   printf("[watch service] profile %d: %d states, %d identities, %d cards\n",profile,n,nc,k);return k;
 }
 
 static void *refreshWorker(void *unused) {
   (void)unused;
-  CatItem *cards=calloc(CW_SERVICE_LIMIT,sizeof *cards);
-  if(!cards){pthread_mutex_lock(&snapshotMu);running=0;pthread_mutex_unlock(&snapshotMu);return NULL;}
   for(;;) {
     pthread_mutex_lock(&snapshotMu);unsigned captured=requested;pthread_mutex_unlock(&snapshotMu);
-    int profile=perfis_ativo(),source=ajustes_cw_fonte();unsigned addonsVersion=addons_versao();
-    int n=cw_service_build(cards,CW_SERVICE_LIMIT,NULL);
+    int profile=perfis_ativo(),source=ajustes_cw_fonte();unsigned addonsVersion=addons_versao(),repoVersion=prog_revisao();
+    int capacity=cw_capacity(profile,source);
+    CatItem *cards=calloc((size_t)capacity,sizeof *cards);
+    if(!cards){pthread_mutex_lock(&snapshotMu);running=0;pthread_mutex_unlock(&snapshotMu);return NULL;}
+    int n=cw_service_build(cards,capacity,NULL);
     pthread_mutex_lock(&snapshotMu);
-    int current=captured==requested && profile==perfis_ativo() && addonsVersion==addons_versao() && source==ajustes_cw_fonte();
+    int current=captured==requested && repoVersion==prog_revisao() && profile==perfis_ativo() && addonsVersion==addons_versao() && source==ajustes_cw_fonte();
     if(n>=0 && current) {
-      memcpy(snapshot,cards,(size_t)n*sizeof *cards);snapshotCount=n;snapshotProfile=profile;snapshotSource=source;
+      free(snapshot);snapshot=cards;cards=NULL;snapshotCount=n;snapshotProfile=profile;snapshotSource=source;
       readyProfile=profile;readySource=source;readyAddons=addonsVersion;revision++;
     }
+    free(cards);
     if(!current || n<0){pthread_mutex_unlock(&snapshotMu);continue;}
     running=0;pthread_mutex_unlock(&snapshotMu);break;
   }
-  free(cards);return NULL;
+  return NULL;
 }
 void cw_service_refresh(void) {
   pthread_mutex_lock(&snapshotMu);requested++;
@@ -245,7 +264,7 @@ int cw_service_ready(int profile,unsigned version) {
 }
 int cw_service_snapshot(CatItem *out,int max) {
   pthread_mutex_lock(&snapshotMu);int n=snapshotProfile==perfis_ativo() && snapshotSource==ajustes_cw_fonte()?snapshotCount:0;
-  if(n>max)n=max;if(n>0)memcpy(out,snapshot,(size_t)n*sizeof *out);pthread_mutex_unlock(&snapshotMu);return n;
+  if(out){if(n>max)n=max;if(n>0)memcpy(out,snapshot,(size_t)n*sizeof *out);}pthread_mutex_unlock(&snapshotMu);return n;
 }
 void cw_service_pump(int canPublish) {
   int profile=perfis_ativo(),source=ajustes_cw_fonte();unsigned repo=prog_revisao(),addonsVersion=addons_versao();
@@ -256,7 +275,7 @@ void cw_service_pump(int canPublish) {
   pthread_mutex_lock(&snapshotMu);
   unsigned ver=revision;int current=snapshotProfile==profile && snapshotSource==source;
   int needs=current && (applied!=ver || lastCatalog!=cat_revisao());
-  CatItem *cards=needs?calloc(CW_SERVICE_LIMIT,sizeof *cards):NULL;
+  CatItem *cards=needs?calloc(snapshotCount?snapshotCount:1,sizeof *cards):NULL;
   int n=snapshotCount;if(cards && n>0)memcpy(cards,snapshot,(size_t)n*sizeof *cards);
   pthread_mutex_unlock(&snapshotMu);
   if(cards) {cat_trocar_continuar(cards,n);applied=ver;lastCatalog=cat_revisao();free(cards);}
@@ -271,6 +290,6 @@ int cw_service_remove(const char *id,int season,int episode) {
   pthread_mutex_unlock(&snapshotMu);int removed=cat_tirar_continuar(id);lastCatalog=cat_revisao();cw_service_refresh();return removed;
 }
 void cw_service_reset(void) {
-  pthread_mutex_lock(&snapshotMu);requested++;snapshotCount=0;snapshotProfile=0;readyProfile=0;revision++;pthread_mutex_unlock(&snapshotMu);
+  pthread_mutex_lock(&snapshotMu);requested++;free(snapshot);snapshot=NULL;snapshotCount=0;snapshotProfile=0;readyProfile=0;revision++;pthread_mutex_unlock(&snapshotMu);
   lastProfile=lastRepo=lastAddons=lastCatalog=0;
 }

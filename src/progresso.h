@@ -26,6 +26,7 @@ double prog_fracao(const ProgRegistro *r);
 int prog_andamento(const ProgRegistro *r);
 int prog_concluido(const ProgRegistro *r);
 int prog_ler(ProgRegistro *saida, int max);
+// saida NULL conta os registros sem copiar nem alocar o historico inteiro.
 int prog_ler_perfil(int perfil, ProgRegistro *saida, int max);
 int prog_por_chave(const char *chave, ProgRegistro *saida);
 int prog_gravar_registro_local(const ProgRegistro *r);

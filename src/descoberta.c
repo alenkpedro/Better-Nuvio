@@ -2624,7 +2624,12 @@ static void *montar(void *u) {
       } \
     } } while (0)
   /* Read-only snapshot: catalog loading never fetches or merges playback. */
-  nContinuar = cw_service_snapshot(lote, CW_SERVICE_LIMIT);
+  int cwCount = cw_service_snapshot(NULL, 0);
+  if(cwCount>cap) {
+    CatItem *larger=realloc(lote,(size_t)cwCount*sizeof *lote);
+    if(larger){lote=larger;cap=cwCount;}
+  }
+  nContinuar = cw_service_snapshot(lote, cap);
   n += nContinuar;
   cw_service_refresh();
   if (CONDENADA("depois do continuar assistindo")) goto condenada;

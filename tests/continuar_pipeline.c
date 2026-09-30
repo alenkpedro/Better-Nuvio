@@ -23,6 +23,7 @@ int arte_reserva_episodios(const char *imdb, const char *corpo) { (void)imdb; (v
 #include <assert.h>
 #include <stdio.h>
 #include <unistd.h>
+#define CONT_MAX 50 /* Small fixtures below; large history is allocated separately. */
 
 // --- DUBLES: so fazem descoberta.c linkar (o conjunto de tests/cateps.c) -----
 int         ajustes_idioma_ingles(void) { return 0; }
@@ -222,6 +223,46 @@ int main(void) {
   assert(cat_item(0)->progresso==cards[0].progresso);
   assert(cat_item(1)->temporada==cards[1].temporada);
   prog_esquecer_tudo();fonteTeste=AJ_CWF_CONTA;modoTeste=CWO_PADRAO;naoExibidosTeste=1;
+  // Full account history must survive selection, sorting, worker and publisher.
+  {
+    enum { TOTAL = 137 };
+    ProgRegistro *history=calloc(TOTAL,sizeof *history);
+    CatItem *full=calloc(TOTAL,sizeof *full);
+    assert(history && full);
+    addonDisponivel=0;
+    for(int i=0;i<TOTAL;i++) {
+      ProgRegistro *r=&history[i];r->perfil=1;r->posSeg=600;r->durSeg=3600;
+      r->percentual=-1;r->lastWatchedMs=agoraMs-i*1000;
+      snprintf(r->contentId,sizeof r->contentId,"tt-history-%03d",i);
+      snprintf(r->tipo,sizeof r->tipo,"movie");
+      snprintf(r->titulo,sizeof r->titulo,"History %d",i+1);
+      snprintf(r->poster,sizeof r->poster,"poster-%03d.jpg",i);
+      prog_chave(r->chave,sizeof r->chave,r->contentId,0,0);
+    }
+    assert(prog_aplicar_snapshot(1,history,TOTAL));
+    assert(prog_ler_perfil(1,NULL,PROG_MAX)==TOTAL && cw_capacity(1,fonteTeste)==TOTAL);
+    for(int mode=CWO_PADRAO;mode<=CWO_SEPARAR;mode++) {
+      modoTeste=mode;
+      assert(cw_service_build(full,TOTAL,NULL)==TOTAL);
+      for(int i=0;i<TOTAL;i++)assert(!strcmp(full[i].imdb,history[i].contentId));
+      assert(cw_service_snapshot(NULL,0)==TOTAL);
+    }
+    cw_service_refresh();
+    for(int tries=0;tries<500;tries++) {
+      pthread_mutex_lock(&snapshotMu);int active=running;pthread_mutex_unlock(&snapshotMu);
+      if(!active)break;
+      usleep(1000);
+    }
+    pthread_mutex_lock(&snapshotMu);assert(!running && snapshotCount==TOTAL);pthread_mutex_unlock(&snapshotMu);
+    lastProfile=1;lastSource=fonteTeste;lastRepo=prog_revisao();lastAddons=addons_versao();
+    cw_service_pump(1);
+    const CatFileira *published=cat_fileira(0);
+    assert(published && !strcmp(published->chave,"continue_watching") && published->n==TOTAL);
+    assert(!strcmp(cat_item(published->ini+TOTAL-1)->imdb,history[TOTAL-1].contentId));
+    free(history);free(full);cw_service_reset();prog_esquecer_tudo();
+    addonDisponivel=1;modoTeste=CWO_PADRAO;
+    puts("ok full account history: 137 titles through all ordering modes, async snapshot and catalog");
+  }
   ProgRegistro row={0};row.percentual=0;row.perfil=1;row.temporada=1;row.episodio=1;row.posSeg=1482;
   snprintf(row.contentId,sizeof row.contentId,"tmdb:299939");snprintf(row.tipo,sizeof row.tipo,"series");
   snprintf(row.titulo,sizeof row.titulo,"Monstro: A História de Lizzie Borden");snprintf(row.poster,sizeof row.poster,"lizzie.jpg");

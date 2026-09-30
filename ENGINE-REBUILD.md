@@ -65,7 +65,7 @@ episódio confirmado continua visível durante atualização e falha de metadado
 
 ## Distribuição
 
-APK 0.1.26 (versionCode 27) e IPK 1.5.34 compilados com o mesmo núcleo.
+APK 0.1.27 (versionCode 28) e IPK 1.5.35 compilados com o mesmo núcleo.
 A validação física no Fire TV e na LG ainda está pendente. O teste Mac usa
 FFmpeg/libass e o mesmo serviço de extração incluído no IPK.
 
@@ -77,3 +77,9 @@ com alvos reutilizados durante a animação. Os nomes são revelados com recorte
 e o ajuste de movimento reduzido continua respeitado. A verificação GL no Mac
 cobriu transparência, mouse, clique, D-pad, recolhimento, resize e restauração
 do framebuffer. O comportamento nas TVs ainda depende do teste físico.
+
+## Continuar assistindo completo (1.5.35 / 0.1.27)
+
+O histórico da conta Nuvio passa inteiro pela seleção e ordenação. Foram removidos os cortes de 50 cards no snapshot e 64 candidatos na montagem. A Home começa com 12 cards e libera os próximos 12 ao chegar ao fim, até o último título disponível. O contador mostra o total completo; a renderização mantém só os cards próximos à tela ativos. A posição acompanha a identidade do título quando o histórico atualiza. A fileira de próximos episódios usa a mesma paginação.
+
+Verificação: 137 títulos, todos os modos de ordenação, publicação assíncrona, passagem pelas fronteiras de página, último card, restauração após reordenação e 70 próximos episódios, com AddressSanitizer e UndefinedBehaviorSanitizer no Mac. Renderização real verificada com D-pad nos cards 12, 65 e 137, sem erros GL.

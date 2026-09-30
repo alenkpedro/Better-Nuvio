@@ -168,8 +168,8 @@ static int newest(const void *a,const void *b) {
 }
 int prog_ler_perfil(int profile,ProgRegistro *out,int max) {
   int n=0;pthread_mutex_lock(&mu);load();
-  for(int i=0;i<count && n<max;i++)if(rows[i].perfil==profile && !rows[i].removido)out[n++]=rows[i];
-  pthread_mutex_unlock(&mu);qsort(out,n,sizeof *out,newest);return n;
+  for(int i=0;i<count && n<max;i++)if(rows[i].perfil==profile && !rows[i].removido){if(out)out[n]=rows[i];n++;}
+  pthread_mutex_unlock(&mu);if(out)qsort(out,n,sizeof *out,newest);return n;
 }
 int prog_ler(ProgRegistro *out,int max) { return prog_ler_perfil(perfis_ativo(),out,max); }
 int prog_por_chave(const char *key,ProgRegistro *out) {
