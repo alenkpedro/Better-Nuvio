@@ -12,3 +12,11 @@ remain applicable to the incorporated code and its modifications.
 
 Credit also goes to [NuvioMedia](https://github.com/NuvioMedia) for Nuvio and its
 original ecosystem. Better Nuvio is an independent, unofficial project.
+
+The embedded Matroska text subtitle extractor in
+`plugin-service/runtime/nuvio/embedded-subtitles.cjs` is copied from
+[NuvioTVSmart](https://github.com/NuvioMedia/NuvioTVSmart),
+`services/webos/src/bitmapSubtitles.js`, revision
+`48a94b347837965e2e052f82707820c0dd7c8028`, copyright its contributors,
+distributed under GPL-3.0. The upstream license and source provenance accompany
+that file.

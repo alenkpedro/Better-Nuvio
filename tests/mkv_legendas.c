@@ -1,12 +1,10 @@
 // #92: casamento legenda da TV <-> TrackEntry num MKV de varias legendas, e
-// colheita do mkvass pela faixa certa. O MKV vem de tests/mkv_legendas.sh:
+// sonda de codecs e ordinais pela faixa certa. O MKV vem de tests/mkv_legendas.sh:
 //   TrackNumber 1 video, 2 audio, 3 ASS "Faixa A" (eng), 4 SRT "Faixa B" (por),
 //   5 ASS "Faixa C" (spa).
 // A LG lista essas legendas com trackNum 0, 1, 2 (MEDIDO na C9 num Erai-raws
 // de 8 legendas: 0..7 contra TrackNumber 3..10).
 #include "../src/mkv.h"
-#include "../src/mkvass.h"
-#include "../src/legenda.h"
 #include "../src/rede.h"
 #include "../src/dados.h"
 #include <stdio.h>
@@ -20,32 +18,6 @@ static void ok(int c, const char *o) {
   printf("  %-60s %s\n", o, c ? "ok" : "FALHOU");
   if (!c) falhas++;
 }
-static long agoraMs(void) {
-  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
-}
-static int colher(double ateSeg) {
-  long t0 = agoraMs();
-  for (;;) {
-    int e = mkvass_estado();
-    mkvass_passo((agoraMs() - t0) / 1000.0 * 6.0);
-    if (e == MKVASS_COMPLETO || e >= MKVASS_NOGO) return e;
-    if (agoraMs() - t0 > (long)(ateSeg * 1000)) return e;
-    usleep(20 * 1000);
-  }
-}
-static void esperarFio(void) {
-  long t0 = agoraMs();
-  while (mkvass_ocupado() && agoraMs() - t0 < 20000) usleep(10 * 1000);
-}
-// Texto do cue vivo no instante do i-esimo evento (1 + i*2,5 s + 0,7 s).
-static int cueCom(int i, const char *pref) {
-  LegendaCue v[LEGENDA_SIMULTANEAS]; int k, m;
-  m = legenda_cues(1.7 + i * 2.5, 0, v, LEGENDA_SIMULTANEAS);
-  for (k = 0; k < m; k++) if (strstr(v[k].texto, pref)) return 1;
-  return 0;
-}
-
 int main(int argc, char **argv) {
   MkvFaixa fx[MKV_MAX_FAIXAS];
   int n, idx[8], modo;
@@ -84,78 +56,6 @@ int main(int argc, char **argv) {
   { int tv[3] = { 1, 2, 3 };     // nem ordinal (3 fora) nem TrackNumber (1, 2 nao sao legenda)
     ok(mkv_casar_legendas(fx, n, tv, 3, idx) == MKV_CASA_NADA,
        "trackNum que cairia no video/audio nao casa"); }
-
-  printf("\n[3] mkvass colhe a faixa do ORDINAL pedido\n");
-  mkvass_iniciar_ordinal(argv[1], 2);
-  ok(!mkvass_janela_pronta(1.7, 12.0),
-     "a TV continua desenhando antes da primeira janela ser extraida");
-  ok(colher(30) == MKVASS_COMPLETO, "ordinal 2 (TrackNumber 5, ASS) completa");
-  ok(mkvass_janela_pronta(1.7, 12.0) && mkvass_janela_pronta(29.2, 12.0),
-     "o app so assume depois de publicar a janela, inclusive apos seek");
-  ok(cueCom(0, "Faixa C 0") && cueCom(11, "Faixa C 11"), "falas da Faixa C, primeira e ultima");
-  ok(!cueCom(3, "Faixa A"), "nenhuma fala da Faixa A (a vizinha)");
-  { int col = 0, tot = 0; mkvass_estatisticas(NULL, NULL, &col, &tot);
-    ok(col == 12 && tot == 12, "12 de 12 eventos colhidos"); }
-  mkvass_parar(); esperarFio(); legenda_desligar();
-
-  mkvass_iniciar_ordinal(argv[1], 0);
-  ok(colher(30) == MKVASS_COMPLETO, "ordinal 0 (TrackNumber 3, ASS) completa");
-  ok(cueCom(5, "Faixa A 5") && !cueCom(5, "Faixa C"), "falas da Faixa A, nao da C");
-  mkvass_parar(); esperarFio(); legenda_desligar();
-
-  mkvass_iniciar_ordinal(argv[1], 1);
-  ok(colher(30) == MKVASS_COMPLETO, "ordinal 1 (TrackNumber 4, SRT) completa no app");
-  ok(cueCom(0, "Faixa B 0") && cueCom(11, "Faixa B 11"),
-     "falas da Faixa B, primeira e ultima");
-  ok(!cueCom(3, "Faixa A") && !cueCom(3, "Faixa C"),
-     "nenhuma fala das faixas ASS vizinhas");
-  mkvass_parar(); esperarFio(); legenda_desligar();
-
-  // O CDN lento entrega primeiro as falas perto do playhead. Um seek ao fim
-  // nao pode desligar a TV antes de publicar os blocos daquela nova janela.
-  {
-    char urlLenta[4096];
-    const char *barra = strchr(argv[1] + strlen("http://"), '/');
-    if (barra && (size_t)(barra - argv[1]) + strlen(barra) + 8 < sizeof urlLenta) {
-      snprintf(urlLenta, sizeof urlLenta, "%.*s/lento%s",
-               (int)(barra - argv[1]), argv[1], barra);
-      mkvass_iniciar_ordinal(urlLenta, 2);
-      long ate = agoraMs() + 25000;
-      int col = 0;
-      while (agoraMs() < ate) {
-        mkvass_passo(1.7);
-        mkvass_estatisticas(NULL, NULL, &col, NULL);
-        if (col > 0) break;
-        usleep(20 * 1000);
-      }
-      ok(col > 0 && col < 12 && !mkvass_janela_pronta(29.2, 12.0),
-         "seek distante mantem a TV ate a nova janela chegar");
-      mkvass_parar(); esperarFio(); legenda_desligar();
-    } else ok(0, "URL do teste lento valida");
-  }
-
-  if (argc > 2) {
-    long ate = agoraMs() + 30000;
-    int pronta = 0;
-    mkvass_iniciar_ordinal(argv[2], 2);
-    while (agoraMs() < ate && mkvass_estado() < MKVASS_NOGO) {
-      mkvass_passo(1.7);
-      pronta = mkvass_janela_pronta(1.7, 12.0);
-      if (pronta) break;
-      usleep(20 * 1000);
-    }
-    if (!pronta) {
-      long ped = 0; int col = 0, tot = 0, nFalas = 0; LegendaCue cue;
-      mkvass_estatisticas(&ped, NULL, &col, &tot);
-      legenda_falas(1.7, 0, &cue, 1, NULL, NULL, &nFalas);
-      printf("  diagnostico sem Cues: estado=%d, varredura=%d, pedidos=%ld, trechos=%d/%d, falas=%d, janela sem adiante=%d\n",
-             mkvass_estado(), mkvass_varredura(), ped, col, tot, nFalas,
-             mkvass_janela_pronta(1.7, 0.0));
-    }
-    ok(pronta && cueCom(0, "Faixa C 0"),
-       "MKV sem Cues troca para o app apos varrer e publicar a janela");
-    mkvass_parar(); esperarFio(); legenda_desligar();
-  }
 
   printf("\n%s (%d falha%s)\n", falhas ? "FALHOU" : "tudo ok", falhas, falhas == 1 ? "" : "s");
   return falhas ? 1 : 0;

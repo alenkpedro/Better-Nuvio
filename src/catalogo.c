@@ -1,4 +1,5 @@
 #include "catalogo.h"
+#include "seriealias.h"
 #include "tendencia.h"
 #include "artereserva.h"
 // FRACO: os testes leves compilam catalogo.c sozinho (tests/catcache.sh e
@@ -941,20 +942,13 @@ void cat_apontar_episodio(int indice, int temporada, int episodio) {
   }
 }
 
-void cat_aplicar_progresso(int indice, double posSeg, double durSeg, int temporada, int episodio) {
-  indice = normalizarIndice(indice);
-  if (indice < 0) return;
-  if (durSeg <= 1.0) {
-    if (!(temporada > 0 && episodio > 0 && posSeg >= 60.0 &&
-          posSeg < 4.0 * 3600.0)) return;
-    itens[indice].progresso = 1;  // iniciado; porcentagem ainda desconhecida
-    itens[indice].restanteMin = 0;
-  } else {
-    itens[indice].progresso = (int)(100.0 * posSeg / durSeg);
-    itens[indice].restanteMin = (int)((durSeg - posSeg) / 60.0 + 0.5);
-  }
-  cat_apontar_episodio(indice, temporada, episodio);
-  mudou();
+void cat_aplicar_progresso(int indice,double pos,double dur,int season,int episode) {
+  indice=normalizarIndice(indice);if(indice<0)return;
+  ProgRegistro r={0};r.posSeg=pos;r.durSeg=dur;r.percentual=-1;
+  itens[indice].posicaoSeg=pos;itens[indice].duracaoSeg=dur;
+  itens[indice].progresso=(int)(100*prog_fracao(&r));
+  itens[indice].restanteMin=dur>pos?(int)((dur-pos)/60+.5):0;
+  cat_apontar_episodio(indice,season,episode);mudou();
 }
 
 // Reaplica o que esta em progresso.c sobre itens[]. Os registros vem do mais
@@ -962,41 +956,31 @@ void cat_aplicar_progresso(int indice, double posSeg, double durSeg, int tempora
 // serie com varios episodios gravados, e o episodio mais recente que a fileira
 // e o "Retomar" querem mostrar.
 static int aplicarProgressoDoDisco(void) {
-  static ProgRegistro regs[PROG_MAX];
-  char *tocado;
-  int k, i, m = cat_n(), aplicados = 0;
-  if (m < 1) return 0;
-  k = prog_ler(regs, PROG_MAX);
-  if (k < 1) return 0;
-  tocado = calloc((size_t)m, 1);
-  if (!tocado) return 0;
-  for (i = 0; i < k; i++) {
-    int j;
-    for (j = 0; j < m; j++) {
-      int card, arco;
-      if (tocado[j] || !itens[j].imdb[0]) continue;
-      card = mesmoTitulo(itens[j].imdb, regs[i].contentId);
-      arco = itens[j].imdbFonte[0] && itens[j].temporadaFonte > 0 &&
-             itens[j].temporadaFonte == regs[i].temporada &&
-             mesmoTitulo(itens[j].imdbFonte, regs[i].contentId);
-      if (!card && !arco) continue;
-      // O ITEM QUE JA E MAIS NOVO QUE O DISCO NAO VOLTA NO TEMPO. O item do
-      // Trakt (pausado ou "a seguir", issue #66) traz o instante em
-      // retomadoMs; um registro local mais velho — o S1E1 a 3% de 8/9 quando
-      // o Trakt diz "viu o S1E1 inteiro em 19/9, a seguir o S1E2" — punha o
-      // episodio ja visto de volta no card, com o selo do outro. Mesma regra
-      // de montarContinuar: o instante decide.
-      if (itens[j].retomadoMs > 0 && itens[j].retomadoMs > regs[i].lastWatchedMs) { tocado[j] = 1; continue; }
-      cat_aplicar_progresso(j, regs[i].posSeg, regs[i].durSeg, regs[i].temporada, regs[i].episodio);
-      tocado[j] = 1;
-      aplicados++;
-      // A mesma temporada pode ter um card da serie principal e outro do
-      // arco. Ambos precisam mostrar o episodio; os outros arcos nao.
+  ProgRegistro *records=calloc(PROG_MAX,sizeof *records);
+  if(!records)return 0;
+  int total=prog_ler(records,PROG_MAX),applied=0;
+  for(int j=0;j<cat_n();j++) {
+    if(itens[j].continuarGerenciado)continue;
+    char id[64];prog_content_id(id,sizeof id,itens[j].imdb,NULL,NULL);
+    if(!*id)continue;
+    int found=0;
+    for(int i=0;i<total;i++) {
+      if(strcmp(id,records[i].contentId))continue;
+      found=1;
+      if(itens[j].retomadoMs>records[i].lastWatchedMs)break;
+      cat_aplicar_progresso(j,records[i].posSeg,records[i].durSeg,records[i].temporada,records[i].episodio);
+      itens[j].progresso=(int)(100*prog_fracao(&records[i]));
+      itens[j].retomadoMs=records[i].lastWatchedMs;applied++;
+      break;
+    }
+    if(!found&&itens[j].retomadoMs>0&&!itens[j].continuarSeguinte) {
+      itens[j].posicaoSeg=itens[j].duracaoSeg=0;itens[j].progresso=itens[j].restanteMin=0;itens[j].retomadoMs=0;mudou();
     }
   }
-  free(tocado);
-  return aplicados;
+  free(records);return applied;
 }
+void cat_reaplicar_progresso(void) { aplicarProgressoDoDisco(); }
+
 
 // TIRA O ITEM DA JANELA DA FILEIRA QUE O CONTEM. Issue #22.
 //
@@ -1159,14 +1143,19 @@ void cat_salvar_progresso(int indice, double posSeg, double durSeg) {
   cat_salvar_progresso_ep(indice,posSeg,durSeg,0,0);
 }
 
-void cat_salvar_progresso_ep(int indice, double posSeg, double durSeg, int temporada, int episodio) {
-  indice = normalizarIndice(indice);
-  if (indice < 0 || !itens[indice].imdb[0]) return;
-  // O arquivo e de progresso.c: chave igual a do web, pendente, com hora. O
-  // imdb do item pode vir composto ("tt123:4:9", itens do Trakt) — a funcao
-  // corta e usa o episodio explicito quando ha.
-  if (!prog_gravar_local(cat_id_fonte(&itens[indice]), temporada, episodio, posSeg, durSeg)) return;
-  cat_aplicar_progresso(indice, posSeg, durSeg, temporada, episodio);
+void cat_salvar_progresso_ep(int indice,double pos,double dur,int season,int episode) {
+  indice=normalizarIndice(indice);if(indice<0)return;
+  const CatItem *item=&itens[indice];ProgRegistro r={0};r.percentual=-1;
+  prog_content_id(r.contentId,sizeof r.contentId,item->imdb,NULL,NULL);
+  snprintf(r.tipo,sizeof r.tipo,"%s",item->tipo);
+  /* Source coordinates are mapped back to this card, for every season card. */
+  if(item->imdbFonte[0] && item->temporadaFonte>0 && season==item->temporadaFonte)season=1;
+  r.temporada=season;r.episodio=episode;r.posSeg=pos;r.durSeg=dur;
+  snprintf(r.titulo,sizeof r.titulo,"%s",item->titulo);
+  snprintf(r.nomeEpisodio,sizeof r.nomeEpisodio,"%s",item->nomeEpisodio);
+  snprintf(r.poster,sizeof r.poster,"%s",item->poster);snprintf(r.backdrop,sizeof r.backdrop,"%s",item->backdrop);
+  snprintf(r.logo,sizeof r.logo,"%s",item->logo);
+  if(prog_gravar_registro_local(&r))cat_aplicar_progresso(indice,pos,dur,season,episode);
 }
 
 unsigned cat_revisao(void) { return catRevisao; }

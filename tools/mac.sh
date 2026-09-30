@@ -21,19 +21,40 @@ for face in Regular Medium; do
   }
 done
 tools/env.sh --require-core >/dev/null
-ENV_D=$(tools/env.sh)
 if ! pkg-config --exists libavformat libavcodec libavutil libswscale libswresample; then
   echo "FFmpeg de desenvolvimento ausente (pkg-config libavformat/libavcodec/libswscale/libswresample)" >&2
   exit 1
 fi
 FF_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswscale libswresample)
 FF_LIBS=$(pkg-config --libs libavformat libavcodec libavutil libswscale libswresample)
+read -r -a FF_CFLAGS_ARR <<< "$FF_CFLAGS"
+read -r -a FF_LIBS_ARR <<< "$FF_LIBS"
+ASS_CFLAGS_ARR=()
+ASS_LIBS_ARR=()
+if pkg-config --exists libass; then
+  read -r -a ASS_CFLAGS_ARR <<< "$(pkg-config --cflags libass)"
+  read -r -a ASS_LIBS_ARR <<< "$(pkg-config --libs libass)"
+  ASS_CFLAGS_ARR+=(-DNV_ASS_LIBASS)
+fi
+# Cada macro precisa ser UM argumento do compilador. O eval anterior quebrava
+# SIMKL_APP_NAME="Better Nuvio" no espaco e impedia abrir o teste no Mac.
+ENV_FILE=$(mktemp)
+trap 'rm -f "$ENV_FILE"' EXIT
+tools/env.sh --env-file "$ENV_FILE"
+DEFINES=()
+while IFS='=' read -r chave valor; do
+  valor=${valor//\\/\\\\}
+  valor=${valor//\"/\\\"}
+  DEFINES+=("-D${chave}=\"${valor}\"")
+done < "$ENV_FILE"
+rm -f "$ENV_FILE"
+trap - EXIT
 export NUVIO_DADOS="${NUVIO_DADOS:-$HOME/.nuvio-native-enhanced-lab}"
 BIN=/tmp/nuvio-native-enhanced-lab-mac
-eval cc src/*.c -o "$BIN" -O1 -g "$ENV_D" "$FF_CFLAGS" \
-  -DNV_MAC_VIDEO \
+cc src/*.c -o "$BIN" -O1 -g "${DEFINES[@]}" "${FF_CFLAGS_ARR[@]}" \
+  -DNV_MAC_VIDEO "${ASS_CFLAGS_ARR[@]}" \
   -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
-  -L/opt/homebrew/lib -lSDL2 -lSDL2_image -lSDL2_ttf -lz "$FF_LIBS" \
+  -L/opt/homebrew/lib -lSDL2 -lSDL2_image -lSDL2_ttf -lz "${FF_LIBS_ARR[@]}" "${ASS_LIBS_ARR[@]}" \
   -framework OpenGL -Wno-deprecated-declarations -Wno-macro-redefined
 if [ "${1:-}" = "--build" ]; then
   echo "Binário Mac atualizado: $BIN"

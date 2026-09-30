@@ -106,7 +106,17 @@ void  prog_chave(char *d, unsigned n, const char *c, int t, int e) {
   (void)c; (void)t; (void)e; if (n) d[0] = 0;
 }
 void  prog_content_id(char *d, unsigned n, const char *i, int *t, int *e) {
-  (void)i; (void)t; (void)e; if (n) d[0] = 0;
+  if (!n) return;
+  snprintf(d, n, "%s", i ? i : "");
+  char *ultimo = strrchr(d, ':');
+  if (!ultimo || !ultimo[1] || strspn(ultimo + 1, "0123456789") != strlen(ultimo + 1)) return;
+  char *penultimo = ultimo;
+  while (penultimo > d && *--penultimo != ':') {}
+  if (*penultimo != ':' || !penultimo[1] ||
+      strspn(penultimo + 1, "0123456789") != (size_t)(ultimo - penultimo - 1)) return;
+  if (t) *t = atoi(penultimo + 1);
+  if (e) *e = atoi(ultimo + 1);
+  *penultimo = 0;
 }
 int   prog_por_chave(const char *c, ProgRegistro *s) { (void)c; (void)s; return 0; }
 // "Tirar de Continuar assistindo" (desc_tirar_continuar, tests/cwremover.sh).
@@ -138,16 +148,24 @@ unsigned addons_versao(void)             { return 1; }   // estatico no teste
 const char *addons_base_por_id(const char *id) { (void)id; return ""; }
 void  addons_manifesto_lido(int i, const char *corpo) { (void)i; (void)corpo; }
 static int requisicoesMonstro;
+static int requisicoesLizzie;
 char *rede_baixar(const char *u, int t) {
   (void)t;
   if (strstr(u, "/meta/series/tt13207736.json")) {
     requisicoesMonstro++;
     return strdup("{\"meta\":{\"id\":\"tt13207736\",\"name\":\"Monster\","
                   "\"videos\":["
-                  "{\"season\":1,\"episode\":1,\"name\":\"Dahmer\"},"
-                  "{\"season\":2,\"episode\":1,\"name\":\"Menendez\"},"
-                  "{\"season\":3,\"episode\":1,\"name\":\"Ed Gein\"},"
-                  "{\"season\":4,\"episode\":1,\"name\":\"Lizzie Borden\"}]}}");
+                  "{\"season\":1,\"episode\":1,\"name\":\"Dahmer\",\"thumbnail\":\"dahmer.jpg\"},"
+                  "{\"season\":2,\"episode\":1,\"name\":\"Menendez\",\"thumbnail\":\"menendez.jpg\"},"
+                  "{\"season\":3,\"episode\":1,\"name\":\"Ed Gein\",\"thumbnail\":\"gein.jpg\"},"
+                  "{\"season\":4,\"episode\":1,\"name\":\"Lizzie Borden\",\"thumbnail\":\"mother-lizzie.jpg\"}]}}");
+  }
+  if (strstr(u, "/meta/series/tmdb:299939.json")) {
+    requisicoesLizzie++;
+    return strdup("{\"meta\":{\"id\":\"tmdb:299939\",\"name\":\"Monstro: Lizzie Borden\","
+                  "\"videos\":["
+                  "{\"season\":1,\"episode\":1,\"name\":\"Banho de Sangue\",\"thumbnail\":\"lizzie-e1.jpg\"},"
+                  "{\"season\":1,\"episode\":2,\"name\":\"Flor Forte\",\"thumbnail\":\"lizzie-e2.jpg\"}]}}");
   }
   if (strstr(u, "/meta/series/tmdb:777.json"))
     return strdup("{\"meta\":{\"id\":\"tmdb:777\",\"imdb_id\":\"tt0000777\",\"name\":\"Exemplo\","
@@ -296,7 +314,7 @@ int main(void) {
   { CatEp eps2[4];
     const char *json =
       "{\"episodes\":["
-      "{\"episode_number\":1,\"crew\":[{\"name\":\"Pessoa\"}],\"name\":\"O início\",\"overview\":\"Sinopse em português\",\"vote_average\":8.3},"
+      "{\"episode_number\":1,\"crew\":[{\"name\":\"Pessoa\"}],\"name\":\"O início\",\"overview\":\"Sinopse em português\",\"still_path\":\"/lizzie-e1.jpg\",\"vote_average\":8.3},"
       "{\"episode_number\":2,\"name\":\"\",\"overview\":\"\"},"
       "{\"episode_number\":3,\"name\":\"O final\",\"vote_average\":7.0}]}";
     memset(eps2, 0, sizeof eps2);
@@ -309,6 +327,7 @@ int main(void) {
     assert(desc_tmdb_enriquecer_temporada(json, eps2, 4, 1, 1, 1) == 2);
     assert(!strcmp(eps2[0].nome, "O início"));
     assert(!strcmp(eps2[0].sinopse, "Sinopse em português"));
+    assert(!strcmp(eps2[0].thumb, "https://image.tmdb.org/t/p/w780/lizzie-e1.jpg"));
     assert(eps2[0].nota == 83);          // 8.3 x10
     assert(!strcmp(eps2[1].nome, "Original"));
     assert(!strcmp(eps2[1].sinopse, "Resumo original"));
@@ -345,8 +364,8 @@ int main(void) {
     assert(!eps2[2].nome[0]); }
   puts("ok  addon completa nomes sem chave TMDB nem perder episodios");
 
-  // H) O catalogo lista arcos de Monster separadamente. Cada card conserva
-  // seu proprio ID, mas os episodios e as fontes pertencem a tt13207736.
+  // H) Cada arco e uma serie propria com temporada 1 e thumbs proprias.
+  // O ID da antologia permanece so para localizar as fontes de video.
   { CatItem arcos[4] = {0};
     const char *nomes[] = {
       "Monstro: A História de Jeffrey Dahmer",
@@ -356,7 +375,7 @@ int main(void) {
     };
     for (int i = 0; i < 4; i++) {
       snprintf(arcos[i].titulo, sizeof arcos[i].titulo, "%s", nomes[i]);
-      snprintf(arcos[i].imdb, sizeof arcos[i].imdb, "tmdb:%d", 100 + i);
+      snprintf(arcos[i].imdb, sizeof arcos[i].imdb, "tmdb:%d", i == 3 ? 299939 : 100 + i);
       snprintf(arcos[i].tipo, sizeof arcos[i].tipo, "series");
       assert(seriealias_aplicar(&arcos[i]));
       assert(arcos[i].temporadaFonte == i + 1);
@@ -365,20 +384,28 @@ int main(void) {
     }
     cat_definir_tudo(arcos, 4, NULL, 0);
     for (int i = 0; i < 4; i++) {
+      addonTesteAtivo = i == 3;
+      assert(seriealias_monster_card_temporada(cat_item(i)) == i + 1);
       epItem = i; epTemp = i + 1; fioEpVivo = 1;
       buscarEps(NULL);
-      assert(cat_n_episodios(i) == 4);
-      assert(cat_item(i)->nTemporadas == 4);
+      if (i == 3) assert(requisicoesLizzie > 0);
+      assert(cat_n_episodios(i) == (i == 3 ? 2 : 1));
+      assert(cat_item(i)->nTemporadas == 1 && cat_item(i)->temporadas[0] == 1);
       assert(cat_item(i)->temporadaFonte == i + 1);
       assert(!strcmp(cat_item(i)->imdb, arcos[i].imdb));
+      assert(cat_episodio(i, 0)->temporada == 1);
+      assert(!strcmp(cat_episodio(i, 0)->thumb,
+                     i == 0 ? "dahmer.jpg" : i == 1 ? "menendez.jpg" :
+                     i == 2 ? "gein.jpg" : "lizzie-e1.jpg"));
     }
+    addonTesteAtivo = 0;
     assert(requisicoesMonstro == 1);
     CatItem doc = {0};
     snprintf(doc.titulo, sizeof doc.titulo, "Ed Gein: Original Psycho");
     snprintf(doc.tipo, sizeof doc.tipo, "series");
     assert(!seriealias_aplicar(&doc));
   }
-  puts("ok  arcos de Monster preservam cards e carregam as quatro temporadas da serie");
+  puts("ok  arcos de Monster mostram uma temporada e as thumbs de cada serie");
 
   // I) Um ID proprio de add-on conserva o prefixo inteiro na URL /meta.
   // Cortar no primeiro ':' fazia a busca de episodios morrer antes da rede.

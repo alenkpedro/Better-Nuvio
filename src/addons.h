@@ -105,6 +105,9 @@ typedef struct {
   char idioma[8];
   char provedor[64];
   char url[600];
+  char arquivo[256]; // nome completo, sem truncar para o rotulo visual
+  char lancamento[256]; // versao de release, quando distinta do nome da legenda
+  double fps;        // 0 quando o addon nao declara a taxa
 } Legenda;
 
 void addons_buscar_legendas(const char *imdb, const char *tipo);

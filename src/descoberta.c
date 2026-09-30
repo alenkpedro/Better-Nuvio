@@ -1,3 +1,4 @@
+#include "watch_service.h"
 #include "descoberta.h"
 #include "idioma.h"
 #include "ajustes.h"
@@ -21,6 +22,7 @@
 #include "simkl.h"
 #include "progresso.h"
 #include "artereserva.h"
+#include "artemetahub.h"
 #include <stdint.h>   /* uintptr_t: a geracao viaja no argumento do fio */
 #include <stdio.h>
 #include <string.h>
@@ -860,8 +862,8 @@ static int deMeta(const char *ini, const char *fim, const char *tipo, CatItem *d
   if (d->backdropTmdb[0] && strstr(d->backdropTmdb, "image.tmdb.org/t/p/"))
     snprintf(d->backdropTmdb, sizeof d->backdropTmdb, "%s", d->backdrop);
 
-  if (!js_texto(ini, fim, "imdb_id", d->imdb, sizeof d->imdb))
-    js_texto(ini, fim, "id", d->imdb, sizeof d->imdb);
+  if (!js_texto_raiz_em(ini, fim, "id", d->imdb, sizeof d->imdb))
+    js_texto_raiz_em(ini, fim, "imdb_id", d->imdb, sizeof d->imdb);
   snprintf(d->tipo, sizeof d->tipo, "%s", tipo);
   // O TIPO DO PROPRIO ITEM VENCE O DO CATALOGO. Catalogo de anime do
   // AIOMetadata declara `type: "anime"` (simkl.trending.anime, mal.*), e o app
@@ -2122,272 +2124,6 @@ static void *fioCatalogo(void *u) {
 // "Continuar assistindo" a partir do progresso local (progresso.c), no mesmo
 // formato que trakt_continuar devolve: imdb (composto em serie), tipo,
 // porcentagem, temporada/episodio. A arte e o texto vem do addon do perfil.
-// Mais recente primeiro (prog_ler ja ordena). Entra o que esta entre
-// 1% e 90%, os mesmos limites de home_registrar_retorno; titulo terminado nao
-// e "continuar". O proximo episodio de uma serie terminada fica para depois.
-static int continuarLocal(CatItem *saida, int max) {
-  static ProgRegistro regs[PROG_MAX];
-  int k, i, n = 0;
-  k = prog_ler(regs, PROG_MAX);
-  for (i = 0; i < k && n < max; i++) {
-    const ProgRegistro *r = &regs[i];
-    const char *id = r->contentId;
-    CatItem *d;
-    double p;
-    int j, repetido = 0;
-    if (r->durSeg <= 1.0) {
-      if (!(r->episodio > 0 && r->posSeg >= 60.0 &&
-            r->posSeg < 4.0 * 3600.0)) continue;
-      p = 0.01; // iniciado, mas a porcentagem so vem com o runtime do metadado
-    } else {
-      if (r->durSeg < 60.0) continue;
-      p = r->posSeg / r->durSeg;
-      if (p < 0.01 || p >= 0.90) continue;
-    }
-    // Registros gravados antes do alias usavam o ID do card de cada arco.
-    // Ao ler, reunimos esse progresso sob a serie principal e a temporada
-    // correspondente, sem perder a posicao que a pessoa ja tinha.
-    if (r->episodio > 0) {
-      int indice = cat_indice_por_imdb(r->contentId);
-      const CatItem *card = indice >= 0 ? cat_item(indice) : NULL;
-      if (card && card->imdbFonte[0] && card->temporadaFonte == r->temporada)
-        id = card->imdbFonte;
-    }
-    // Uma serie com varios episodios gravados entra UMA vez, no mais recente.
-    for (j = 0; j < n; j++) {
-      char anterior[24];
-      prog_content_id(anterior, sizeof anterior, saida[j].imdb, NULL, NULL);
-      if (!strcmp(anterior, id)) { repetido = 1; break; }
-    }
-    if (repetido) continue;
-    d = &saida[n];
-    memset(d, 0, sizeof *d);
-    d->progresso = (int)(100.0 * p);
-    // O instante ja esta aqui, no registro: carimbar agora poupa a busca por
-    // chave que instanteDaConta faria depois, e sobrevive a compactacao do
-    // trakt_enfeitar_lote. Ver retomadoMs em catalogo.h.
-    d->retomadoMs = r->lastWatchedMs;
-    if (r->episodio > 0) {
-      d->temporada = r->temporada;
-      d->episodio  = r->episodio;
-      snprintf(d->imdb, sizeof d->imdb, "%s:%d:%d", id,
-               r->temporada ? r->temporada : 1, r->episodio);
-      snprintf(d->tipo, sizeof d->tipo, "series");
-    } else {
-      snprintf(d->imdb, sizeof d->imdb, "%s", id);
-      snprintf(d->tipo, sizeof d->tipo, "movie");
-    }
-    n++;
-  }
-  if (n) printf("[desc] continuar assistindo local: %d\n", n);
-  return n;
-}
-
-// --- "CONTINUAR ASSISTINDO": AS DUAS FONTES, UNIDAS ---------------------------
-//
-// O DEFEITO (issue #5, "Nuvio Sync Issue"). A linha era
-//   `if (nContinuar == 0 && !trakt_ativo()) nContinuar = continuarLocal(...)`
-// ou seja: com o Trakt vinculado a fileira saia EXCLUSIVAMENTE do Trakt e o
-// progresso da CONTA Nuvio — que e o que chega do celular da pessoa, via
-// syncprog.c -> progresso.c, e o que continuarLocal le — era simplesmente
-// ignorado. As duas metades do relato sao essa unica linha:
-//   "assisto no celular e na TV nao aparece em Continuar assistindo"
-//     -> o registro da conta existia no disco e nunca era lido;
-//   "aparecem filmes e series que eu nunca assisti"
-//     -> vinham do /sync/playback antigo do Trakt, que guarda tudo que algum
-//        cliente Trakt ja pausou, e o caminho do Trakt NAO aplicava os limites
-//        de 1% a 90% que o caminho local sempre aplicou.
-//
-// POR QUE A UNIAO E A RESPOSTA CERTA, e nao escolher uma fonte: as duas
-// respondem a mesma pergunta sobre universos DIFERENTES. O Trakt sabe o que a
-// pessoa assistiu em qualquer cliente Trakt; a conta Nuvio sabe o que ela
-// assistiu nos aparelhos Nuvio dela. Escolher uma joga fora metade do
-// historico, e foi isso que aconteceu — em qualquer das duas direcoes o dono
-// perde. Deduplicar por imdb e ordenar pelo instante mais recente da o que ele
-// pediu: uma fileira so, com o que ele assistiu, onde quer que tenha assistido.
-//
-// QUANDO AS DUAS DISCORDAM DO MESMO TITULO, A MAIS RECENTE GANHA. E ai esta a
-// aproximacao que sobra: `trakt_continuar` NAO expoe o `paused_at` que vem no
-// JSON de /sync/playback, entao o instante de um item do Trakt so e conhecido
-// quando existe um registro local com a mesma chave (prog_por_chave). Sem
-// instante, o item do Trakt perde do que tem instante e mantem a posicao
-// relativa que o Trakt lhe deu. Expor `paused_at` em trakt.c troca esta regra
-// por uma comparacao exata; ate la, dado desconhecido ordena DEPOIS do
-// conhecido em vez de virar um instante inventado.
-// 12 e nao 8 (19/09, issue #66): com os itens "a seguir" do Trakt entrando
-// alem dos pausados, 8 lugares eram todos dos pausados e o "a seguir" nunca
-// aparecia. trakt_continuar ordena por instante antes de entregar.
-#define CONT_MAX 12
-
-// Os limites que o caminho local sempre teve e o do Trakt nao: os mesmos de
-// home_registrar_retorno. Abaixo de 1% nao se comecou, de 90% em diante
-// acabou — e "continuar" nao e nem uma coisa nem a outra.
-static int emAndamento(int pct) { return pct >= 1 && pct < 90; }
-
-// QUANDO este item foi visto por ultimo, em ms. 0 = nao se sabe.
-//
-// Tres fontes, na ordem de confianca:
-//   1. o instante que veio COM o item. O do Trakt e o `paused_at` do
-//      /sync/playback; o da conta e o last_watched que o syncprog ja
-//      reconciliou entre celular e TV. Os dois sao carimbados na origem.
-//   2. o registro LOCAL desta obra, quando o item nao trouxe instante — e o
-//      caso de um item do Trakt que este aparelho tambem assistiu.
-//   3. nada. Ai o desempate e a ordem que a propria fonte deu, e nao uma data
-//      inventada (ver o campo `ord` em montarContinuar).
-//
-// O passo 2 existia sozinho antes, e era insuficiente: um titulo que a pessoa
-// assiste SO em outro aparelho e por outro cliente Trakt nao tem registro local
-// nenhum, entao TODO item do Trakt entrava com instante 0 e a fileira ordenava
-// pela ordem de resposta.
-static long long instanteDaConta(const CatItem *c) {
-  ProgRegistro r;
-  char id[24], chave[48];
-  int temp = c->temporada, ep = c->episodio;
-  if (c->retomadoMs > 0) return c->retomadoMs;
-  prog_content_id(id, sizeof id, c->imdb, &temp, &ep);
-  prog_chave(chave, sizeof chave, id, temp, ep);
-  if (!prog_por_chave(chave, &r)) return 0;
-  return r.lastWatchedMs;
-}
-
-// 1 quando os dois itens sao a MESMA OBRA. O teste e o de continuarLocal:
-// compara so a parte antes do ':', porque "tt123:4:9" e "tt123:1:2" sao dois
-// episodios da mesma serie e a fileira mostra a serie uma vez.
-static int mesmaObra(const CatItem *a, const CatItem *b) {
-  char ia[24], ib[24];
-  prog_content_id(ia, sizeof ia, a->imdb, NULL, NULL);
-  prog_content_id(ib, sizeof ib, b->imdb, NULL, NULL);
-  return ia[0] && !strcmp(ia, ib);
-}
-
-// O progresso vem do Trakt/Simkl ou da conta, sem texto para a interface.
-// Consultar o /meta do addon de catalogo deste perfil pelo IMDb
-// funciona tambem quando o titulo nao aparece em nenhuma fileira da Home.
-// Uma consulta por item, em paralelo, sem bloquear a thread de desenho.
-typedef struct {
-  CatItem *itens;
-  unsigned char *localizados;
-  int n, prox, encontrados;
-  char base[600];
-  pthread_mutex_t trava;
-} MetaContinuar;
-
-static void *metaContinuarFio(void *arg) {
-  MetaContinuar *job = arg;
-  for (;;) {
-    int i;
-    char id[24], url[900], *corpo;
-    const char *m, *obj, *fim;
-    char titulo[sizeof job->itens[0].titulo] = "";
-    char sinopse[sizeof job->itens[0].sinopse] = "";
-    char poster[sizeof job->itens[0].poster] = "";
-    char fundo[sizeof job->itens[0].backdrop] = "";
-    char logo[sizeof job->itens[0].logo] = "";
-    char duracao[40] = "", ano[40] = "";
-    char idMeta[64] = "";
-    pthread_mutex_lock(&job->trava);
-    i = job->prox++;
-    pthread_mutex_unlock(&job->trava);
-    if (i >= job->n) break;
-    if (strncmp(job->itens[i].imdb, "tt", 2)) continue;
-    snprintf(id, sizeof id, "%s", job->itens[i].imdb);
-    { char *ep = strchr(id, ':'); if (ep) *ep = 0; }
-    snprintf(url, sizeof url, "%s/meta/%s/%s.json", job->base,
-             !strcmp(job->itens[i].tipo, "series") ? "series" : "movie", id);
-    corpo = rede_baixar(url, 5);
-    if (!corpo) continue;
-    m = strstr(corpo, "\"meta\"");
-    obj = m ? strchr(m, '{') : NULL;
-    fim = obj ? js_fim(obj) : NULL;
-    if (!obj || !fim) { free(corpo); continue; }
-    js_texto_raiz_em(obj, fim, "id", idMeta, sizeof idMeta);
-    if (idMeta[0] && strcmp(idMeta, id)) { free(corpo); continue; }
-    js_texto_raiz_em(obj, fim, "name", titulo, sizeof titulo);
-    js_texto_raiz_em(obj, fim, "description", sinopse, sizeof sinopse);
-    js_texto_raiz_em(obj, fim, "poster", poster, sizeof poster);
-    js_texto_raiz_em(obj, fim, "background", fundo, sizeof fundo);
-    js_texto_raiz_em(obj, fim, "logo", logo, sizeof logo);
-    js_texto_raiz_em(obj, fim, "runtime", duracao, sizeof duracao);
-    js_texto_raiz_em(obj, fim, "releaseInfo", ano, sizeof ano);
-    // Sem nome do addon, este item continua pendente. Nunca publicar o titulo
-    // do Trakt, Simkl ou Cinemeta como substituto temporario.
-    if (titulo[0]) {
-      CatItem *it = &job->itens[i];
-      snprintf(it->titulo, sizeof it->titulo, "%s", titulo);
-      if (sinopse[0]) snprintf(it->sinopse, sizeof it->sinopse, "%s", sinopse);
-      if (poster[0]) snprintf(it->poster, sizeof it->poster, "%s", poster);
-      if (fundo[0]) {
-        snprintf(it->backdrop, sizeof it->backdrop, "%s", fundo);
-        snprintf(it->backdropCatalogo, sizeof it->backdropCatalogo, "%s", fundo);
-      } else if (poster[0])
-        snprintf(it->backdrop, sizeof it->backdrop, "%s", poster);
-      if (logo[0] && !ehSvg(logo) && strcmp(logo, it->poster))
-        snprintf(it->logo, sizeof it->logo, "%s", logo);
-      { char *tr = strstr(ano, "\xe2\x80\x93"); if (tr) *tr = 0; }
-      if (ano[0] || duracao[0])
-        snprintf(it->meta, sizeof it->meta, "%.20s%s%.20s", ano,
-                 ano[0] && duracao[0] ? "  \xc2\xb7  " : "", duracao);
-      if (duracao[0]) {
-        int minutos = atoi(duracao);
-        if (minutos > 0) {
-          int restanteEstimado = -1;
-          // O pull pode trazer posicao sem duracao. Estimar a barra pelo
-          // runtime do titulo; o player usa a posicao absoluta para retomar.
-          char chave[48]; ProgRegistro pr;
-          prog_chave(chave, sizeof chave, it->imdb, it->temporada, it->episodio);
-          if (prog_por_chave(chave, &pr) && pr.durSeg <= 1.0 && pr.posSeg > 0 &&
-              pr.posSeg < minutos * 60.0) {
-            int pct = (int)(100.0 * pr.posSeg / (minutos * 60.0));
-            it->progresso = pct < 1 ? 1 : pct > 89 ? 89 : pct;
-            restanteEstimado = (int)((minutos * 60.0 - pr.posSeg) / 60.0 + 0.5);
-          }
-          it->restanteMin = restanteEstimado >= 0 ? restanteEstimado : it->progresso > 0
-            ? minutos - minutos * it->progresso / 100 : minutos;
-        }
-      }
-      snprintf(it->genero, sizeof it->genero, "%s",
-               i18n(!strcmp(it->tipo, "series") ? "Programa de TV" : "Filme"));
-      it->nota = (int)(js_num(obj, fim, "imdbRating", 0.0) * 10.0 + 0.5);
-      if (it->nota > 99) it->nota /= 10;
-      // Os nomes dos episodios, inclusive "a seguir", pertencem ao mesmo
-      // /meta do addon. Se nao houver videos[] o card mostra apenas T/E.
-      if (it->episodio > 0 && !strcmp(it->tipo, "series")) {
-        const char *v = js_array(obj, fim, "videos");
-        while (v) {
-          const char *vf = js_fim(v);
-          char videoId[64] = "";
-          js_texto(v, vf, "id", videoId, sizeof videoId);
-          if (!strcmp(videoId, it->imdb)) {
-            js_texto(v, vf, "name", it->nomeEpisodio, sizeof it->nomeEpisodio);
-            if (it->progresso == 0) {
-              char quando[40] = "";
-              if (!js_texto(v, vf, "released", quando, sizeof quando))
-                js_texto(v, vf, "firstAired", quando, sizeof quando);
-              cwo_marcar_estreia(it->imdb,
-                                 quando[0] ? js_ms_iso(quando) : CWO_SEM_DATA);
-            }
-            break;
-          }
-          v = js_prox(vf);
-        }
-      }
-      if (job->localizados) job->localizados[i] = 1;
-      pthread_mutex_lock(&job->trava);
-      job->encontrados++;
-      pthread_mutex_unlock(&job->trava);
-    }
-    free(corpo);
-  }
-  return NULL;
-}
-
-static int nomeXperience(const char *nome) {
-  const char *p;
-  for (p = nome; p && *p; p++)
-    if (!strncasecmp(p, "xperience", 10)) return 1;
-  return 0;
-}
-
 static int contemSemCaixa(const char *texto, const char *trecho) {
   size_t n = strlen(trecho);
   for (; texto && *texto; texto++)
@@ -2401,494 +2137,22 @@ static int addonMetaPreferido(void) {
     if (!addons_tem_meta(i) ||
         contemSemCaixa(addons_nome(i), "cinemeta") ||
         contemSemCaixa(addons_base(i), "cinemeta.strem.io")) continue;
-    if (melhor < 0 || nomeXperience(addons_nome(i))) {
+    if (melhor < 0 || contemSemCaixa(addons_nome(i),"xperience")) {
       melhor = i;
-      if (nomeXperience(addons_nome(i))) break;
+      if (contemSemCaixa(addons_nome(i),"xperience")) break;
     }
   }
   return melhor;
 }
 
-static void localizarContinuar(CatItem *itens, int n, unsigned char *localizados) {
-  MetaContinuar job;
-  pthread_t fios[4];
-  int i, melhor, criados = 0;
-  if (n <= 0 || n > CONT_MAX) return;
-  if (localizados) memset(localizados, 0, (size_t)n);
-  if (perfis_precisa_escolher() ||
-      addons_perfil_da_lista() != perfis_ativo()) return;
-  // Xperience costuma fornecer o texto localizado da conta. Cinemeta ja foi
-  // usado para preencher lacunas; repetir sua resposta aqui manteria o ingles.
-  melhor = addonMetaPreferido();
-  if (melhor < 0) return;
-  memset(&job, 0, sizeof job);
-  job.itens = itens; job.localizados = localizados; job.n = n;
-  snprintf(job.base, sizeof job.base, "%s", addons_base(melhor));
-  pthread_mutex_init(&job.trava, NULL);
-  for (i = 0; i < 3 && i < n; i++)
-    if (pthread_create(&fios[criados], NULL, metaContinuarFio, &job) == 0)
-      criados++;
-  metaContinuarFio(&job);
-  for (i = 0; i < criados; i++) pthread_join(fios[i], NULL);
-  pthread_mutex_destroy(&job.trava);
-  if (job.encontrados)
-    printf("[desc] continuar assistindo: %d metadado(s) do addon %s\n",
-           job.encontrados, addons_nome(melhor));
+/* Compatibility entry points for the existing menus. All state and work are
+ * owned by watch_service; discovery only reads its published snapshot. */
+int desc_continuar_pronto(int profile,unsigned addonsVersion) {
+  return cw_service_ready(profile,addonsVersion);
 }
-
-// Os episodios de uma antologia usam o ID da serie principal, mas o catalogo
-// guarda os arcos como cards separados. O meta do addon pode nem ter a serie
-// principal; e, quando tem, o titulo/arte dela escondem qual arco foi visto.
-// Preferir o card da temporada. Para os demais titulos, o catalogo so serve de
-// reserva se o addon de metadados nao encontrou o item.
-static int metaContinuarDoCatalogo(CatItem *it, int preferirArco) {
-  char id[24];
-  int escolhido = -1;
-  CatItem antigo;
-  prog_content_id(id, sizeof id, it->imdb, NULL, NULL);
-  if (!id[0]) return 0;
-  if (preferirArco && it->temporada > 0)
-    for (int j = 0; j < cat_n(); j++) {
-      const CatItem *c = cat_item(j);
-      if (c && c->imdbFonte[0] && !strcmp(c->imdbFonte, id) &&
-          c->temporadaFonte == it->temporada && c->titulo[0] &&
-          (c->poster[0] || c->backdrop[0])) { escolhido = j; break; }
-    }
-  if (escolhido < 0 && !preferirArco)
-    escolhido = cat_indice_por_imdb(id);
-  if (escolhido < 0) return 0;
-  const CatItem *card = cat_item(escolhido);
-  if (!card || !card->titulo[0] || (!card->poster[0] && !card->backdrop[0])) return 0;
-  antigo = *it;
-  *it = *card;
-  snprintf(it->imdb, sizeof it->imdb, "%s", antigo.imdb);
-  snprintf(it->tipo, sizeof it->tipo, "%s", antigo.tipo);
-  it->progresso = antigo.progresso;
-  it->temporada = antigo.temporada;
-  it->episodio = antigo.episodio;
-  it->retomadoMs = antigo.retomadoMs;
-  if (antigo.restanteMin > 0) it->restanteMin = antigo.restanteMin;
-  if (antigo.nomeEpisodio[0])
-    snprintf(it->nomeEpisodio, sizeof it->nomeEpisodio, "%s", antigo.nomeEpisodio);
-  return 1;
-}
-
-// O card aberto so pela colecao nao integra necessariamente o catalogo salvo
-// da Home. Apos reiniciar, o progresso da antologia ainda aponta para a serie
-// principal, mas o addon de metadados do perfil pode nao ter essa serie.
-// Buscar a capa canonica nesse caso evita que o titulo desapareca da fileira;
-// quando o arco voltar ao catalogo, ele substitui este card na proxima refacao.
-static int metaContinuarMonsterReserva(CatItem *it) {
-  char id[24];
-  unsigned char localizado = 0;
-  MetaContinuar job;
-  prog_content_id(id, sizeof id, it->imdb, NULL, NULL);
-  if (strcmp(id, "tt13207736")) return 0;
-  memset(&job, 0, sizeof job);
-  job.itens = it;
-  job.localizados = &localizado;
-  job.n = 1;
-  snprintf(job.base, sizeof job.base, "https://v3-cinemeta.strem.io");
-  pthread_mutex_init(&job.trava, NULL);
-  metaContinuarFio(&job);
-  pthread_mutex_destroy(&job.trava);
-  if (!localizado) return 0;
-  snprintf(it->titulo, sizeof it->titulo, "%s",
-           ajustes_idioma_ingles() ? "Monster" : "Monstros");
-  return 1;
-}
-
-// A conta pode trazer o episodio antes de qualquer colecao do arco carregar.
-// Mesmo sem resposta de /meta, a identidade da temporada basta para manter o
-// item visivel e abrir a serie principal no episodio certo. A arte chega na
-// proxima refacao quando o catalogo ou o metadado estiver disponivel.
-static int metaContinuarMonsterTemporada(CatItem *it) {
-  static const char *pt[] = {
-    "", "Monstro: A História de Jeffrey Dahmer", "Monstros: Irmãos Menendez",
-    "Monstro: A História de Ed Gein", "Monstro: A História de Lizzie Borden"
-  };
-  static const char *en[] = {
-    "", "Monster: The Jeffrey Dahmer Story", "Monsters: The Menendez Brothers",
-    "Monster: The Ed Gein Story", "Monster: The Lizzie Borden Story"
-  };
-  char id[24];
-  prog_content_id(id, sizeof id, it->imdb, NULL, NULL);
-  if (strcmp(id, "tt13207736") || it->temporada < 1 || it->temporada > 4)
-    return 0;
-  snprintf(it->titulo, sizeof it->titulo, "%s",
-           ajustes_idioma_ingles() ? en[it->temporada] : pt[it->temporada]);
-  return 1;
-}
-
-static void complementarContinuarDoCatalogo(CatItem *itens, int n,
-                                             unsigned char *localizados) {
-  for (int i = 0; i < n; i++) {
-    if (metaContinuarDoCatalogo(&itens[i], 1)) {
-      localizados[i] = 1;
-    } else {
-      if (!localizados[i] && metaContinuarDoCatalogo(&itens[i], 0))
-        localizados[i] = 1;
-      if (!localizados[i] && metaContinuarMonsterReserva(&itens[i]))
-        localizados[i] = 1;
-      if (metaContinuarMonsterTemporada(&itens[i])) localizados[i] = 1;
-    }
-  }
-}
-
-// Um candidato da fileira, com o que se sabe sobre QUANDO ele aconteceu.
-typedef struct { CatItem *item; long long ms; int ord; } Cand;
-
-// A fileira tambem e refeita FORA do ciclo completo (issue #38), pelo fio de
-// desc_refazer_continuar. Os buffers estaticos abaixo — e os de
-// trakt_enfeitar_lote, chamado tambem por trakt_social — nao admitem dois
-// montadores ao mesmo tempo, entao a trava cobre os DOIS usos em montar().
-static pthread_mutex_t contTrava = PTHREAD_MUTEX_INITIALIZER;
-
-// Aplica a um lote REMOTO (Trakt ou Simkl) os limites de 1% a 90% e o
-// cruzamento com o registro local mais novo. Compacta no lugar; devolve quantos
-// ficaram. `aSeguir` diz quais itens sao "a seguir" (entram com 0%).
-static int filtrarRemoto(CatItem *v, int n, int (*aSeguir)(const char *),
-                         int *fora) {
-  int i, w;
-  for (i = 0, w = 0; i < n; i++) {
-    // "A SEGUIR" (issue #66) entra com 0%: e o proximo episodio de uma serie
-    // cujo ultimo terminou. Nao e "pausado", mas e "continuar".
-    if (!aSeguir(v[i].imdb) && !emAndamento(v[i].progresso)) { (*fora)++; continue; }
-    // O REGISTRO LOCAL MAIS NOVO VENCE A RESPOSTA REMOTA. Sem este cruzamento
-    // a refazagem da fileira (issue #38) lia um /sync/playback que ainda nao
-    // recebeu o scrobble que acabamos de mandar: o titulo terminado voltava a
-    // aparecer como "em andamento" por alguns minutos. O desempate e por
-    // instante — um registro local mais VELHO que o paused_at remoto nao
-    // manda em nada.
-    { ProgRegistro r; char id[24], chave[48];
-      int tt = v[i].temporada, ee = v[i].episodio;
-      prog_content_id(id, sizeof id, v[i].imdb, &tt, &ee);
-      prog_chave(chave, sizeof chave, id, tt, ee);
-      if (prog_por_chave(chave, &r) && r.durSeg > 1.0 &&
-          r.lastWatchedMs > v[i].retomadoMs) {
-        int pct = (int)(100.0 * r.posSeg / r.durSeg);
-        // "A SEGUIR" ABERTO E LARGADO NO COMECO NAO SAI DA FILEIRA. Visto na
-        // C9 em 22/09: abrir o "Up next" de Adolescence (S1E2) e voltar aos 30 s
-        // gravou 0,8% local, mais novo que o Trakt; o pct virava 0, caia fora
-        // de 1-90% e a serie SUMIA do Continuar assistindo — o proximo
-        // episodio que o app acabara de oferecer. Abaixo de 1% ele continua
-        // sendo "a seguir" (progresso 0); do fim para cima (>90%) sai, como
-        // antes, porque ai terminou. Vale para Trakt e Simkl (aSeguir).
-        if (pct < 1 && aSeguir(v[i].imdb)) pct = 0;
-        else if (!emAndamento(pct)) { (*fora)++; continue; }
-        v[i].progresso = pct;
-      } }
-    if (w != i) v[w] = v[i];
-    w++;
-  }
-  return w;
-}
-
-static int montarContinuar(CatItem *saida, int max, unsigned char *localizados) {
-  // static: dois lotes de 12 CatItem passam de 350 KB e montar() roda uma vez,
-  // num fio so — a mesma razao do vetor de Decl mais abaixo.
-  static CatItem doTrakt[CONT_MAX], daConta[CONT_MAX];
-  // Tres fontes: conta, Trakt e Simkl, cada uma com ate CONT_MAX.
-  static Cand juntos[CONT_MAX * 3];
-  // Os REMOTOS numa lista so (Trakt e Simkl), por ponteiro. E ela que a conta
-  // enfrenta abaixo: para a regra "a mesma obra entra uma vez, a mais recente
-  // ganha", Trakt e Simkl sao a mesma pergunta feita a dois servicos.
-  static CatItem *remotos[CONT_MAX * 2];
-  // O lote do Simkl vai no HEAP e so quando e pedido: 12 CatItem sao ~190 KB,
-  // e na Samsung (teto de 128 MiB do WebAssembly) nao se paga isso em BSS para
-  // quem nunca vinculou o Simkl.
-  CatItem *doSimkl = NULL;
-  int nT, nS = 0, nR = 0, nL, nJ = 0, i, j, fora = 0, repetidos = 0;
-
-  // FONTE ESCOLHIDA EM AJUSTES (AJ_CWF_*). 0 = todas, 1 = so a conta Nuvio,
-  // 2 = so o Trakt, 3 = so o Simkl. Existe porque quem usa a conta Nuvio e
-  // tambem tem Trakt ligado via um outro cliente via o "Continuar" do outro
-  // aparelho aparecer aqui sem ter pedido.
-  //
-  // "AMBAS" INCLUI O SIMKL QUANDO HA VINCULO (issue #110). Quem vinculou o
-  // Simkl nesta TV disse que acompanha por ele; deixa-lo de fora do padrao
-  // repetiria o defeito do #5 — uma fonte vinculada e ignorada em silencio.
-  // Quem nao vinculou nao paga nada: sem token, nenhum pedido sai.
-  int fonte = ajustes_cw_fonte();
-  int querConta = fonte == AJ_CWF_AMBAS || fonte == AJ_CWF_CONTA;
-  int querTrakt = fonte == AJ_CWF_AMBAS || fonte == AJ_CWF_TRAKT;
-  int querSimkl = (fonte == AJ_CWF_AMBAS || fonte == AJ_CWF_SIMKL) && simkl_ativo();
-
-  if (max > CONT_MAX) max = CONT_MAX;
-  nT = querTrakt ? trakt_continuar(doTrakt, CONT_MAX) : 0;
-  // Os limites AGORA valem para todas as fontes. Sem isto, o /sync/playback
-  // devolve o que qualquer cliente pausou uma vez — inclusive titulos em 0% e
-  // titulos praticamente terminados, que e o "nunca assisti isso" do relato.
-  nT = filtrarRemoto(doTrakt, nT, trakt_e_a_seguir, &fora);
-  if (querSimkl) {
-    doSimkl = (CatItem *)malloc(sizeof(CatItem) * CONT_MAX);
-    if (doSimkl) {
-      nS = simkl_continuar(doSimkl, CONT_MAX);
-      nS = filtrarRemoto(doSimkl, nS, simkl_e_a_seguir, &fora);
-    }
-  }
-  if (fonte == AJ_CWF_SIMKL && !simkl_ativo())
-    printf("[desc] continuar assistindo: fonte Simkl sem vinculo; fileira vazia\n");
-
-  // TRAKT E SIMKL NA MESMA OBRA: fica o de instante mais novo. Os dois
-  // costumam concordar (muita gente sincroniza um no outro), e dois cards da
-  // mesma serie seriam o defeito que continuarLocal ja evita.
-  for (i = 0; i < nT; i++) remotos[nR++] = &doTrakt[i];
-  for (i = 0; i < nS; i++) {
-    int k, achou = -1;
-    for (k = 0; k < nR && achou < 0; k++)
-      if (mesmaObra(remotos[k], &doSimkl[i])) achou = k;
-    if (achou < 0) { remotos[nR++] = &doSimkl[i]; continue; }
-    repetidos++;
-    if (instanteDaConta(&doSimkl[i]) > instanteDaConta(remotos[achou]))
-      remotos[achou] = &doSimkl[i];
-  }
-  nL = querConta ? continuarLocal(daConta, CONT_MAX) : 0;
-
-  // A CONTA ENTRA PRIMEIRO porque ela e a fonte DATADA (lastWatchedMs, que o
-  // syncprog ja reconciliou entre celular e TV). O item remoto que fala da
-  // mesma obra sai: manter os dois poria a mesma serie duas vezes na fileira,
-  // que e o defeito que continuarLocal ja evitava dentro da propria lista.
-  //
-  // EXCETO QUANDO O REMOTO E MAIS NOVO NA MESMA OBRA (issue #66): a conta tinha
-  // S1E1 a 3% de 8/9 e o Trakt dizia "viu S1E1 inteiro em 19/9, a seguir
-  // S1E2"; manter a conta punha na fileira um episodio ja visto, com o selo
-  // "a seguir" do outro. O instante decide, como no resto desta funcao.
-  { static int pularLocal[CONT_MAX];
-    memset(pularLocal, 0, sizeof pularLocal);
-    for (i = 0; i < nR; i++)
-      for (j = 0; j < nL; j++)
-        if (mesmaObra(remotos[i], &daConta[j]) &&
-            instanteDaConta(remotos[i]) > instanteDaConta(&daConta[j]))
-          pularLocal[j] = 1;
-  for (i = 0; i < nL && nJ < (int)(sizeof juntos / sizeof *juntos); i++) {
-    if (pularLocal[i]) continue;
-    juntos[nJ].item = &daConta[i];
-    juntos[nJ].ms   = instanteDaConta(&daConta[i]);
-    juntos[nJ].ord  = i;
-    nJ++;
-  }
-  for (i = 0; i < nR && nJ < (int)(sizeof juntos / sizeof *juntos); i++) {
-    int repetido = 0;
-    for (j = 0; j < nL; j++)
-      if (!pularLocal[j] && mesmaObra(remotos[i], &daConta[j])) { repetido = 1; break; }
-    if (repetido) { repetidos++; continue; }
-    juntos[nJ].item = remotos[i];
-    juntos[nJ].ms   = instanteDaConta(remotos[i]);
-    // Ordem BASE alta: SO decide quando os dois instantes sao desconhecidos ou
-    // iguais. Com o paused_at lido em trakt.c e simkl.c isso ficou raro.
-    // Nesse resto de casos a conta vem antes, cada fonte na ordem que deu.
-    juntos[nJ].ord  = 1000 + i;
-    nJ++;
-  } }
-
-  // O QUE A PESSOA TIROU NAO VOLTA COM O REMOTO VELHO. O DELETE do Trakt, do
-  // Simkl e da conta sai em fio (ctxmenu.c), e ate cada servidor refletir, o
-  // /sync/playback ainda devolve o item — com o paused_at de ANTES da remocao.
-  // prog_removido_vence compara esse instante com o da remocao: mais velho
-  // fica fora; mais novo (assistiu de novo em outro aparelho, ou aqui) volta.
-  { int w = 0, tirados = 0;
-    for (i = 0; i < nJ; i++) {
-      if (prog_removido_vence(juntos[i].item->imdb, juntos[i].ms)) { tirados++; continue; }
-      juntos[w++] = juntos[i];
-    }
-    nJ = w;
-    if (tirados)
-      printf("[desc] continuar assistindo: %d tirado(s) pela pessoa, remoto ainda nao refletiu\n",
-             tirados); }
-
-  // Insercao: estavel, nJ <= 36, e roda uma vez por ciclo de descoberta.
-  for (i = 1; i < nJ; i++) {
-    int k = i;
-    while (k > 0) {
-      long long a = juntos[k].ms, b = juntos[k - 1].ms;
-      int troca;
-      if (a != b) troca = !b ? 0 : (!a ? 1 : a > b);
-      else        troca = juntos[k].ord < juntos[k - 1].ord;
-      if (!troca) break;
-      { Cand t = juntos[k - 1]; juntos[k - 1] = juntos[k]; juntos[k] = t; }
-      k--;
-    }
-  }
-
-  // A ORDENACAO ESCOLHIDA EM AJUSTES (issue #127) — ver cwordem.h. Ate aqui a
-  // lista esta pelo instante, que e o modo "Padrao". "Estilo streaming" e
-  // "Separar futuros" levam os "a seguir" que ainda nao foram ao ar para o fim,
-  // pela estreia; no segundo a home ainda os tira desta fileira e monta
-  // "Proximos episodios" com eles. `showUnairedNextUp` desligado os tira de vez
-  // (shouldShowNextUpEpisodeForContinueWatching do web): antes esta preferencia
-  // tambem nao era lida por ninguem.
-  { static CwoItem cwo[CONT_MAX * 3];
-    static Cand ordenados[CONT_MAX * 3];
-    static int perm[CONT_MAX * 3];
-    static const char *futIds[CONT_MAX * 3];
-    long long agora = (long long)time(NULL) * 1000LL;
-    int modo = ajustes_cw_ordem(), naoExibidos = ajustes_cw_mostrar_nao_exibidos();
-    int escondidos = 0, semData = 0, principal, nFut = 0, mp, mf, w = 0;
-    for (i = 0; i < nJ; i++) {
-      const CatItem *c = juntos[i].item;
-      CwoItem x;
-      x.aSeguir = c->progresso == 0 &&
-                  (trakt_e_a_seguir(c->imdb) || simkl_e_a_seguir(c->imdb));
-      x.estreiaMs = x.aSeguir ? cwo_estreia(c->imdb) : CWO_SEM_DATA;
-      // POR ITEM, para o log de campo dizer POR QUE um "a seguir" nao virou
-      // futuro: sem data ele conta como exibido (como o `hasAired !== false`
-      // do web) e a Ordenacao nao o move.
-      if (x.aSeguir && x.estreiaMs == CWO_SEM_DATA) {
-        semData++;
-        printf("[desc] continuar assistindo: a seguir %s sem data de estreia (conta como exibido)\n",
-               c->imdb);
-      }
-      if (!naoExibidos && cwo_futuro(&x, agora)) {
-        escondidos++;
-        printf("[desc] continuar assistindo: a seguir %s ainda nao foi ao ar; escondido "
-               "(nao exibidos desligado)\n", c->imdb);
-        continue;
-      }
-      juntos[w] = juntos[i];
-      cwo[w++] = x;
-    }
-    nJ = w;
-    principal = cwo_ordenar(cwo, nJ, modo, agora, perm);
-    for (i = 0; i < nJ; i++) ordenados[i] = juntos[perm[i]];
-    // O CORTE DE `max` COM RESERVA PARA OS FUTUROS (cwo_corte, cwordem.h).
-    // Antes era um slice de [exibidos..., futuros...]: com a fileira cheia —
-    // 22 candidatos para 12 lugares na C9 do dono — os futuros eram sempre os
-    // cortados, e "Separar futuros"/"Estilo streaming" nao mudavam nada.
-    cwo_corte(principal, nJ - principal, max, &mp, &mf);
-    for (i = 0; i < mp; i++) juntos[i] = ordenados[i];
-    for (i = 0; i < mf; i++) {
-      juntos[mp + i] = ordenados[principal + i];
-      futIds[nFut++] = juntos[mp + i].item->imdb;
-    }
-    if (modo != CWO_PADRAO)
-      for (i = 0; i < mf; i++)
-        printf("[desc] continuar assistindo: futuro %s estreia %lld%s\n",
-               futIds[i], cwo_estreia(futIds[i]),
-               modo == CWO_SEPARAR ? " (Proximos episodios)" : " (no fim)");
-    { int cortadosFut = nJ - principal - mf, cortados = principal - mp;
-      nJ = mp + mf;
-      // Publicado ANTES de cat_trocar_continuar (quem chama publica a fileira
-      // depois deste retorno): a home nunca ve a lista nova com o conjunto velho.
-      cwo_publicar_futuros(futIds, nFut);
-      if (modo != CWO_PADRAO || escondidos || semData)
-        printf("[desc] continuar assistindo: ordem %s, %d futuro(s)%s, %d escondido(s), "
-               "%d sem data, nao exibidos %s, corte: %d exibido(s) e %d futuro(s) fora\n",
-               modo == CWO_SEPARAR ? "separar futuros" : modo == CWO_STREAMING
-                                   ? "estilo streaming" : "padrao",
-               nFut, modo == CWO_SEPARAR ? " na fileira propria" : " no fim", escondidos,
-               semData, naoExibidos ? "ligado" : "desligado", cortados, cortadosFut); } }
-
-  if (nJ > max) nJ = max;
-  for (i = 0; i < nJ; i++) {
-    saida[i] = *juntos[i].item;
-    if (getenv("NUVIO_CW_LOG"))
-      printf("[desc] cw[%d] %s T%dE%d %d%% ms=%lld %s\n", i, saida[i].imdb, saida[i].temporada,
-             saida[i].episodio, saida[i].progresso, juntos[i].ms,
-             juntos[i].item >= daConta && juntos[i].item < daConta + CONT_MAX ? "conta"
-             : doSimkl && juntos[i].item >= doSimkl && juntos[i].item < doSimkl + CONT_MAX ? "simkl"
-             : "trakt");
-  }
-  // O progresso fornece IDs, nunca metadados para a interface. Deixar o
-  // espaco da fileira vazio ate o /meta do addon responder evita a troca
-  // visivel de ingles por portugues no hero e nas miniaturas.
-  { unsigned char vindosDoAddon[CONT_MAX] = {0};
-    int w = 0;
-    for (i = 0; i < nJ; i++) {
-      saida[i].titulo[0] = saida[i].sinopse[0] = saida[i].logo[0] = 0;
-      saida[i].poster[0] = saida[i].backdrop[0] = 0;
-      saida[i].backdropCatalogo[0] = saida[i].backdropTrakt[0] = 0;
-      saida[i].backdropTmdb[0] = saida[i].meta[0] = 0;
-      saida[i].nomeEpisodio[0] = saida[i].genero[0] = 0;
-      saida[i].nota = saida[i].restanteMin = 0;
-    }
-    localizarContinuar(saida, nJ, vindosDoAddon);
-    complementarContinuarDoCatalogo(saida, nJ, vindosDoAddon);
-    for (i = 0; i < nJ; i++) if (vindosDoAddon[i]) {
-      if (w != i) saida[w] = saida[i];
-      if (localizados) localizados[w] = 1;
-      w++;
-    }
-    nJ = w;
-  }
-  printf("[desc] continuar assistindo: %d do Trakt, %d do Simkl (%d fora de 1-90%%), "
-         "%d da conta, %d repetido(s); %d na fileira\n",
-         nT, nS, fora, nL, repetidos, nJ);
-  fflush(stdout);
-  // O lote do Simkl ja foi COPIADO para `saida` acima; nada mais aponta nele.
-  free(doSimkl);
-  return nJ;
-}
-
-// --- REFAZER "CONTINUAR ASSISTINDO" FORA DO CICLO (issue #38) -----------------
-//
-// A fileira era recomposta so dentro de montar(), uma vez por ciclo de
-// descoberta. Entre dois ciclos, quem mudava o progresso — sair do player, ou
-// o sync trazendo o que o celular assistiu — atualizava o ITEM no lugar e a
-// fileira continuava com o conjunto velho: titulo que entrou em progresso nao
-// aparecia, titulo terminado nao saia. Era o "nao atualiza ou demora" do
-// relato: a atualizacao existia, mas so o desenho do card a via.
-//
-// O refazer e o MESMO montarContinuar, em fio proprio porque ele faz rede
-// (/sync/playback + um meta por item). Quem pede duas vezes seguidas — sair
-// do player no meio de uma refazagem — ganha UMA rodada a mais no fim, nao
-// uma fila: so o estado final interessa.
-static volatile int cwVivo, cwDeNovo;
-static _Atomic uint64_t cwPronto;
-void desc_refazer_continuar(void);
-
-int desc_continuar_pronto(int perfil, unsigned versaoAddons) {
-  uint64_t marca = ((uint64_t)(unsigned)perfil << 32) | versaoAddons;
-  return atomic_load_explicit(&cwPronto, memory_order_acquire) == marca;
-}
-
-static void *fioContinuar(void *u) {
-  CatItem lote[CONT_MAX];
-  int n, perfil = perfis_ativo();
-  unsigned versao = addons_versao();
-  (void)u;
-  pthread_mutex_lock(&contTrava);
-  n = montarContinuar(lote, CONT_MAX, NULL);
-  pthread_mutex_unlock(&contTrava);
-  if (perfil == perfis_ativo() && !perfis_precisa_escolher()) {
-    cat_trocar_continuar(lote, n);
-    if (!cwDeNovo && addons_perfil_da_lista() == perfil &&
-        addons_versao() == versao)
-      atomic_store_explicit(&cwPronto,
-                            ((uint64_t)(unsigned)perfil << 32) | versao,
-                            memory_order_release);
-  }
-  cwVivo = 0;
-  if (cwDeNovo) { cwDeNovo = 0; desc_refazer_continuar(); }
-  return NULL;
-}
-
-void desc_refazer_continuar(void) {
-  pthread_t t;
-  atomic_store_explicit(&cwPronto, 0, memory_order_release);
-  if (cwVivo) { cwDeNovo = 1; return; }
-  cwVivo = 1;
-  if (pthread_create(&t, NULL, fioContinuar, NULL) != 0) cwVivo = 0;
-  else pthread_detach(t);
-}
-
-// A METADE LOCAL DE "TIRAR DE CONTINUAR ASSISTINDO", toda no fio de quem
-// chama e sem rede: apaga a linha de progresso.c, carimba a remocao (a
-// refacao seguinte nao traz o item de volta com o remoto mais velho) e tira o
-// card da fileira publicada por identidade, bumpando a revisao — a home ve no
-// mesmo quadro. A ORDEM importa: o carimbo vem ANTES de tirar, para uma
-// cat_trocar_continuar concorrente ou ja enxergar o carimbo (e podar) ou
-// publicar antes da remocao (e ser corrigida por ela). Os DELETE remotos sao
-// de quem chama. Devolve quantos cards sairam.
-int desc_tirar_continuar(const char *imdb, int temporada, int episodio) {
-  char chave[192];
-  if (!imdb || !imdb[0]) return 0;
-  // A chave e montada do mesmo jeito que progresso.c monta ao gravar — com
-  // temporada e episodio quando ha —, senao a linha apagada seria outra.
-  prog_chave(chave, sizeof chave, imdb, temporada, episodio);
-  prog_remover(chave);
-  prog_marcar_removido(imdb);
-  return cat_tirar_continuar(imdb);
+void desc_refazer_continuar(void) { cw_service_refresh(); }
+int desc_tirar_continuar(const char *id,int season,int episode) {
+  return cw_service_remove(id,season,episode);
 }
 
 // A ORDEM DOS CANDIDATOS A FILEIRA, com as preferencias de AGORA.
@@ -3275,37 +2539,6 @@ static void publicarParcial(CatItem **lote, int *cap, int n,
   parcialNaTela = 1;
 }
 
-// O Trakt entrega o progresso cedo, mas costuma trazer nome e sinopse em
-// ingles. Quando o mesmo IMDb chega pelo catalogo da conta, seus metadados
-// passam a ser os do destaque; episodio e progresso continuam os do Trakt.
-static void mesclarMetaDoCatalogo(CatItem *continuar, int nContinuar,
-                                 const unsigned char *localizados,
-                                 const CatItem *catalogo, int nCatalogo) {
-  int i, j;
-  for (i = 0; i < nContinuar; i++) {
-    CatItem *alvo = &continuar[i];
-    if (localizados && localizados[i]) continue;
-    size_t tam = strcspn(alvo->imdb, ":");
-    if (tam < 3 || strncmp(alvo->imdb, "tt", 2)) continue;
-    for (j = 0; j < nCatalogo; j++) {
-      const CatItem *fonte = &catalogo[j];
-      if (strcmp(alvo->tipo, fonte->tipo) ||
-          strlen(fonte->imdb) != tam ||
-          strncmp(alvo->imdb, fonte->imdb, tam)) continue;
-      if (fonte->titulo[0]) {
-        if (strcmp(alvo->titulo, fonte->titulo)) {
-          // Uma logo antiga pode continuar dizendo o nome em ingles.
-          snprintf(alvo->logo, sizeof alvo->logo, "%s", fonte->logo);
-        }
-        snprintf(alvo->titulo, sizeof alvo->titulo, "%s", fonte->titulo);
-      }
-      if (fonte->sinopse[0])
-        snprintf(alvo->sinopse, sizeof alvo->sinopse, "%s", fonte->sinopse);
-      break;
-    }
-  }
-}
-
 static void *montar(void *u) {
   // O lote tambem cresce: era dimensionado por CAT_MAX e por isso herdava o
   // mesmo teto arbitrario.
@@ -3313,7 +2546,7 @@ static void *montar(void *u) {
   CatItem *lote = malloc(sizeof(CatItem) * (size_t)cap);
   int n = 0, i;
   int nContinuar = 0;
-  unsigned char cwLocalizados[CONT_MAX] = {0};
+
   unsigned minhaGeracao = montagemGeracao;
   // O CONTEXTO EM QUE ESTA VOLTA BUSCA, em partes (ver homeestado.h). A
   // identidade vale do inicio: o Trakt e lido logo abaixo. Os addons sao
@@ -3390,38 +2623,11 @@ static void *montar(void *u) {
                         listas, &listasNaTela); \
       } \
     } } while (0)
-  // AS DUAS FONTES, UNIDAS. Ver o cabecalho de montarContinuar: com Trakt
-  // vinculado esta fileira ignorava o progresso da conta Nuvio, que e o que
-  // chega do celular do dono.
-  pthread_mutex_lock(&contTrava);
-  nContinuar = montarContinuar(lote, CONT_MAX, cwLocalizados);
+  /* Read-only snapshot: catalog loading never fetches or merges playback. */
+  nContinuar = cw_service_snapshot(lote, CW_SERVICE_LIMIT);
   n += nContinuar;
-  marco("trakt continuar assistindo");
-  if (CONDENADA("depois do continuar assistindo")) {
-    pthread_mutex_unlock(&contTrava);
-    goto condenada;
-  }
-  pthread_mutex_unlock(&contTrava);
-  // O historico do Trakt e a PRIMEIRA fileira da home e chega ~1,6 s antes dos
-  // manifestos. Publicar aqui poe conteudo na tela nesse instante em vez de
-  // segurar tudo ate o fim.
-  // Monta direto em filsMontadas: o vetor local `fil` so existe mais abaixo, e
-  // criar um aqui so para copiar seria trabalho a toa.
-  if (n > 0 && progressivo) {
-    int nf = 0;
-    if (nContinuar > 0) {
-      CatFileira *f0 = &filsMontadas[nf++];
-      memset(f0, 0, sizeof *f0);
-      snprintf(f0->chave,  sizeof f0->chave,  "continue_watching");
-      snprintf(f0->titulo, sizeof f0->titulo, "Continuar assistindo");
-      snprintf(f0->tipo,   sizeof f0->tipo,   "movie");
-      f0->ini = 0; f0->n = nContinuar;
-    }
-    nFileirasMontadas = nf;
-    nPublicado = n;
-    publicarParcial(&lote, &cap, n, filsMontadas, nf, listas, &listasNaTela);
-    marco("continuar assistindo na tela");
-  }
+  cw_service_refresh();
+  if (CONDENADA("depois do continuar assistindo")) goto condenada;
   LISTAS_SE_PRONTAS();
 #define GARANTE(quantos) do { \
     if (n + (quantos) > cap) { \
@@ -3817,7 +3023,7 @@ static void *montar(void *u) {
             GARANTE(MAX_POR_FILEIRA + 2);
             if (got > cap - n) got = cap - n;
             if (got > 0) {
-              mesclarMetaDoCatalogo(lote, nContinuar, cwLocalizados, origem, got);
+
               memcpy(lote + n, origem, sizeof(CatItem) * (size_t)got);
             }
           {
@@ -4383,7 +3589,7 @@ void desc_esquecer(void) {
   free(discCats);
   discCats = NULL;
   pthread_mutex_unlock(&discCatsTrava);
-  atomic_store_explicit(&cwPronto, 0, memory_order_release);
+  cw_service_reset();
 }
 
 // --- episodios sob demanda ---------------------------------------------------
@@ -4458,8 +3664,10 @@ int desc_tmdb_enriquecer_temporada(const char *json, CatEp *eps, int n,
           if (texto) {
             char nome[sizeof eps[i].nome] = "";
             char sinopse[sizeof eps[i].sinopse] = "";
+            char still[128] = "";
             js_texto_raiz_em(p, f, "name", nome, sizeof nome);
             js_texto_raiz_em(p, f, "overview", sinopse, sizeof sinopse);
+            js_texto_raiz_em(p, f, "still_path", still, sizeof still);
             if (nome[0] && strcmp(eps[i].nome, nome)) {
               snprintf(eps[i].nome, sizeof eps[i].nome, "%s", nome);
               mudou = 1;
@@ -4467,6 +3675,14 @@ int desc_tmdb_enriquecer_temporada(const char *json, CatEp *eps, int n,
             if (sinopse[0] && strcmp(eps[i].sinopse, sinopse)) {
               snprintf(eps[i].sinopse, sizeof eps[i].sinopse, "%s", sinopse);
               mudou = 1;
+            }
+            if (still[0] == '/') {
+              char thumb[sizeof eps[i].thumb];
+              snprintf(thumb, sizeof thumb, "https://image.tmdb.org/t/p/w780%s", still);
+              if (strcmp(eps[i].thumb, thumb)) {
+                snprintf(eps[i].thumb, sizeof eps[i].thumb, "%s", thumb);
+                mudou = 1;
+              }
             }
           }
           if (notas) {
@@ -4611,7 +3827,8 @@ int desc_meta_tem_temporadas(const char *corpo) {
   return 0;
 }
 
-static int publicarEpisodios(const char *corpo, int alvoItem, const char *titulo) {
+static int publicarEpisodios(const char *corpo, int alvoItem, const char *titulo,
+                             int temporadaFonte) {
 // Em par com CAT_EP_MAX (catalogo.c): um titulo que caiba no store nao pode
 // truncar no parse, e um que nao caiba trunca aqui em vez de zerar os outros.
 #define VIDEOS_MAX 1200
@@ -4622,11 +3839,11 @@ static int publicarEpisodios(const char *corpo, int alvoItem, const char *titulo
   while (p && n < VIDEOS_MAX) {
     const char *f = js_fim(p);
     int t = (int)js_num(p, f, "season", -1);
-    if (t > 0) {
+    if (t > 0 && (!temporadaFonte || t == temporadaFonte)) {
       CatEp *e = &eps[n];
       char d[24] = "";
       memset(e, 0, sizeof *e);
-      e->temporada = t;
+      e->temporada = temporadaFonte ? 1 : t;
       e->episodio = (int)js_num(p, f, "episode", 0);
       js_texto(p, f, "name", e->nome, sizeof e->nome);
       js_texto(p, f, "overview", e->sinopse, sizeof e->sinopse);
@@ -4689,6 +3906,9 @@ static void *buscarEps(void *u) {
   const CatItem *it;
   char url[600], *corpo = NULL;
   char serie[64];
+  char idArco[64] = "";
+  int arco = seriealias_monster_card_temporada(orig);
+  int corpoDoArco = 0;
   (void)u;
   if (!orig || !cat_id_fonte(orig)[0]) { fioEpVivo = 0; return NULL; }
   // CANAL NAO PASSA AQUI. O Cinemeta so conhece filme/serie por id do IMDb
@@ -4715,12 +3935,19 @@ static void *buscarEps(void *u) {
   int nTipos = desc_meta_tipos(orig->tipo, tipos), ti, ehFilme = 1;
   base = *orig;
   it = &base;
+  if (arco) prog_content_id(idArco, sizeof idArco, orig->imdb, NULL, NULL);
   { const char *dp;
     snprintf(serie, sizeof serie, "%s", cat_id_fonte(it));
     dp = !strncmp(serie, "tt", 2) ? strchr(serie, ':') : NULL;
     if (dp) *(char *)dp = 0; }
 
-  for (ti = 0; !strncmp(serie, "tt", 2) && ti < nTipos; ti++) {
+  // A ficha do proprio arco traz seus episodios como temporada 1. Consultar
+  // primeiro esse ID impede misturar as thumbs da serie mae na pagina.
+  if (arco && idArco[0]) {
+    corpo = metaSerieDosAddons(idArco);
+    if (corpo) { corpoDoArco = 1; ehFilme = 0; nTipos = 1; }
+  }
+  for (ti = 0; !corpo && !strncmp(serie, "tt", 2) && ti < nTipos; ti++) {
     char chave[40];
     int ultimo = ti == nTipos - 1;
     // A CHAVE DO CACHE LEVA O TIPO. Era so o id, e /meta/movie/tt13293588 e
@@ -4767,11 +3994,12 @@ static void *buscarEps(void *u) {
     base.tmdb = 0;
   }
   if (!ehFilme) {
-    publicarEpisodios(corpo, alvoItem, it->titulo);
+    publicarEpisodios(corpo, alvoItem, it->titulo,
+                      arco && !corpoDoArco ? arco : 0);
     // Temporada e data de cada episodio para a reserva do still: quando o
     // TMDB divide a serie em outras temporadas (One Piece), e por elas que o
     // still do TMDB e achado (artereserva.h).
-    arte_reserva_episodios(serie, corpo);
+    if (!corpoDoArco) arte_reserva_episodios(serie, corpo);
   }
   // O MAPA DE EPISODIOS VISTOS NAO E PEDIDO AQUI, e essa linha existe para dizer
   // por que: extras.c JA baixa /shows/<id>/progress/watched ao abrir o titulo,
@@ -4782,6 +4010,7 @@ static void *buscarEps(void *u) {
   // novo para cada uma seria tres viagens ao mesmo lugar.
   {
     CatItem edit = *it;
+    if (arco && edit.temporada == arco) edit.temporada = 1;
     const char *c = js_array(corpo, NULL, "cast");
     int k = 0;
     while (c && k < CAT_ELENCO_MAX) {
@@ -4862,6 +4091,10 @@ static void *buscarEps(void *u) {
               edit.temporadas[i2] = edit.temporadas[j2];
               edit.temporadas[j2] = tmp;
             } } }
+    if (arco) {
+      edit.nTemporadas = 1;
+      edit.temporadas[0] = 1;
+    }
     // Publica texto, generos e temporadas antes do enriquecimento de imagens.
     cat_atualizar_item(alvoItem, &edit);
     marco("detalhe: meta basico na tela");
@@ -4887,7 +4120,7 @@ static void *buscarEps(void *u) {
               epsLocalizados[i2].episodio == edit.episodio)
             snprintf(nomeAntes, sizeof nomeAntes, "%s", epsLocalizados[i2].nome);
         }
-        int mudaram = desc_addon_buscar_episodios(serie, epsLocalizados,
+        int mudaram = desc_addon_buscar_episodios(arco ? idArco : serie, epsLocalizados,
                                                   nEpsLocalizados);
         if (mudaram) {
           cat_definir_episodios(alvoItem, epsLocalizados, nEpsLocalizados);
@@ -4900,16 +4133,17 @@ static void *buscarEps(void *u) {
       }
     }
     if (epsLocalizados && ajustes_tmdb_eps() && chaveEps[0]) {
-      // Um card de arco pode ter o TMDB daquele arco, enquanto os episodios
-      // do Cinemeta pertencem a serie principal. Resolva o TMDB pelo IMDb
-      // canonico antes de complementar a temporada.
-      long tmdbId = edit.imdbFonte[0] ? 0 : edit.tmdb;
-      if (tmdbId <= 0) {
+      // A temporada exibida e a da serie do arco. So ela pode fornecer
+      // nomes e imagens de episodios para esta ficha.
+      long tmdbId = arco && cat_id_lizzie(orig->imdb) ? 299939 :
+                    arco || !edit.imdbFonte[0] ? edit.tmdb : 0;
+      const char *idTmdb = arco ? idArco : serie;
+      if (tmdbId <= 0 && !strncmp(idTmdb, "tt", 2)) {
         char urlFind[400];
         char *respFind;
         snprintf(urlFind, sizeof urlFind,
                  "%s/find/%s?api_key=%s&external_source=imdb_id",
-                 TMDB, serie, chaveEps);
+                 TMDB, idTmdb, chaveEps);
         respFind = rede_baixar(urlFind, 20);
         if (respFind) {
           const char *p3 = js_array(respFind, NULL, "tv_results");
@@ -4919,10 +4153,11 @@ static void *buscarEps(void *u) {
       }
       if (tmdbId > 0) {
         tmdbIdSerie = tmdbId;
-        if (!edit.imdbFonte[0]) edit.tmdb = tmdbId;
+        if (arco || !edit.imdbFonte[0]) edit.tmdb = tmdbId;
         tmdbIdResolvido = 1;
         int mudaram = desc_tmdb_buscar_temporadas(
-            epsLocalizados, nEpsLocalizados, tmdbId, chaveEps, epTemp, 1);
+            epsLocalizados, nEpsLocalizados, tmdbId, chaveEps,
+            arco ? 1 : epTemp, 1);
         if (mudaram) {
           cat_definir_episodios(alvoItem, epsLocalizados, nEpsLocalizados);
           desc_nome_episodio_atual(&edit, epsLocalizados, nEpsLocalizados,
@@ -4932,17 +4167,19 @@ static void *buscarEps(void *u) {
     }
     { char idBase[24];
       const char *dp;
-      snprintf(idBase, sizeof idBase, "%s", cat_id_fonte(it));
+      snprintf(idBase, sizeof idBase, "%s", arco ? idArco : cat_id_fonte(it));
       dp = strchr(idBase, ':');
       if (dp) *(char *)dp = 0;
-      fotosDoElenco(&edit, idBase, !strcmp(it->tipo, "series")); }
+      if (!arco || !strncmp(idBase, "tt", 2))
+        fotosDoElenco(&edit, idBase, !strcmp(it->tipo, "series")); }
     cat_atualizar_item(alvoItem, &edit);
     printf("[desc] %s: %d atores, dir='%s', %d temporadas\n",
            edit.titulo, edit.nElenco, edit.direcao, edit.nTemporadas);
     fflush(stdout);
     if (epsLocalizados && tmdbIdResolvido) {
       int mudaram = desc_tmdb_buscar_temporadas(
-          epsLocalizados, nEpsLocalizados, tmdbIdSerie, chaveEps, epTemp, 0);
+          epsLocalizados, nEpsLocalizados, tmdbIdSerie, chaveEps,
+          arco ? 1 : epTemp, 0);
       if (mudaram) {
         cat_definir_episodios(alvoItem, epsLocalizados, nEpsLocalizados);
         desc_nome_episodio_atual(&edit, epsLocalizados, nEpsLocalizados,

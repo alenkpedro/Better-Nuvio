@@ -8,10 +8,12 @@
 #include "anim.h"
 #include "layout.h"
 #include "legenda.h"
-#include "mkvass.h"
+#include "subtitle_engine.h"
 #include "assrender.h"
 #include "ajustes.h"
 #include "catalogo.h"
+#include "streams.h"
+#include "subtitle_match.h"
 #include "linguas.h"
 #include <stdio.h>
 #include <string.h>
@@ -67,117 +69,24 @@ static void corFocoFaixa(float *r, float *g, float *b) {
 // mentia sobre qual era.
 static int legExterna = -1;
 
-// LEGENDA EMBUTIDA DE TEXTO PELO OVERLAY (#92). `legOverlay` e o indice da
-// faixa embutida cujo texto o mkvass.c esta colhendo do MKV por Range para o
-// overlay do app desenhar. A TV continua desenhando ate o trecho atual estar
-// publicado; so entao o app desliga o renderer nativo. Nesse estado,
-// video_legenda_atual() diz -1 e a folha precisa de legOverlay para marcar a
-// faixa certa como ativa. Mesmo motivo do legExterna acima.
-//
-// `legOverlayNoGo` e a faixa em que o mkvass DESISTIU (arquivo sem indice da
-// legenda, servidor sem Range): a folha voltou a entregar a faixa ao pipeline
-// e mostra o motivo; escolher a mesma faixa de novo vai direto ao pipeline,
-// sem tentar outra vez.
-//
-// Na LG o player nativo e silenciado enquanto o app coleta e compoe a faixa;
-// em no-go, a selecao volta ao uMS. NA SAMSUNG ESTE RAMO NAO RODA: o
-// video_tizen.c nao preenche `codec`, entao ehAss e sempre falso la e a faixa
-// vai ao AVPlay, cujo texto o player desenha pelo onsubtitlechange (#122).
-static int legOverlay = -1, legOverlayNoGo = -1;
-
-// Faixa embutida escolhida ANTES de a sonda do cabecalho voltar (#92, webOS
-// 25). Sem a sonda nao se sabe o codec nem o ordinal, e a 1.4.2 mandava a
-// faixa para a TV EM SILENCIO — sem log, sem aviso — e la ficava: era o "liga
-// e desliga, metade da frase" do relato, numa TV em que o buffer demorava a
-// dar os 20 s que disparavam a sonda. Agora a faixa vai a TV so ENQUANTO a
-// sonda corre (disparada na hora); quando ela volta, faixas_atualizar decide
-// e diz no log por que ficou onde ficou.
-static int legOverlayEsperando = -1;
-
-// LEGENDA AUTOMATICA DA SESSAO (#129): 1 do inicio de uma reproducao ate a
-// decisao (ligou, nao havia o que ligar, ou a pessoa escolheu na folha).
-// `legAutoDesde` e o instante em que o video ficou pronto, base dos prazos.
 static int legAuto;
 static Uint32 legAutoDesde;
-
-// NO-GO PASSAGEIRO x DEFINITIVO. Um Range que falhou (rede, timeout, 5xx,
-// freio do CDN, o servidor que devolveu o arquivo inteiro uma vez) nao e
-// motivo para entregar a faixa a TV DE VEZ: o mkvass tenta de novo com recuo
-// (mkvass_recuo_ms: 2, 5, 15, 30, 60 s...), SEM LIMITE enquanto a faixa estiver
-// escolhida. Nas primeiras MKVASS_TENTATIVAS_OVERLAY o overlay fica com o que
-// ja colheu; dali em diante (ou logo, se nao colheu nada) a TV desenha POR
-// ENQUANTO (`legOverlayTV`) e, quando uma tentativa volta a entregar fala
-// nova, a faixa volta ao app. So o definitivo (nao e MKV, codec, sem indice,
-// Range recusado de novo, recusa HTTP definitiva) devolve a faixa de vez, com o
-// motivo no log e no aviso. Contado por ESCOLHA de faixa; `legOverlayFalhas`
-// zera quando chega fala nova (`legOverlayColhidos` e a marca).
-//
-// #92, 1.4.5: tres falhas seguidas davam "a TV vai desenhar (falha de rede)"
-// e a faixa ficava na TV — que corta metade das falas — ate o fim do episodio.
-static int legOverlayFalhas, legOverlayRecusas, legOverlayNoGoEstado;
-static int legOverlayTV, legOverlayColhidos;
-int faixas_legenda_embutida_na_tv(void) { return legOverlay >= 0 && legOverlayTV; }
-static Uint32 legOverlayRetomar;       // 0 = nada agendado
-
-static int ehAss(const VideoFaixa *f) {
-  return f && (!strncmp(f->codec, "S_TEXT/ASS", 10) || !strncmp(f->codec, "S_TEXT/SSA", 10));
+static int ehAss(const VideoFaixa *f) { return f && (!strcmp(f->codec,"S_TEXT/ASS") || !strcmp(f->codec,"S_TEXT/SSA")); }
+int faixas_legenda_embutida_na_tv(void) {
+#if (defined(__arm__) && !defined(__ANDROID__)) || defined(__EMSCRIPTEN__)
+  return subtitle_engine_native();
+#else
+  return 0; /* Mac/Media3 deliver cues to the app, not to a native video plane. */
+#endif
 }
-
-static int ehTextoSimples(const VideoFaixa *f) {
-  return f && !strcmp(f->codec, "S_TEXT/UTF8");
-}
-
-static int ehOverlay(const VideoFaixa *f) { return ehAss(f) || ehTextoSimples(f); }
-
-// Comeca a colher a faixa embutida `i` (ordinal `ord` no arquivo). A TV
-// continua desenhando ate o overlay ter o trecho atual pronto.
-static void overlayAssumir(int i, int ord) {
-  const VideoFaixa *f = video_legenda(i);
-  // O Enhanced so esconde o renderer nativo DEPOIS de ter cues utilizaveis.
-  // Range pode levar segundos no CDN: manter a faixa selecionada nesse tempo.
-  if (video_legenda_atual() != i) video_escolher_legenda(i);
-  mkvass_iniciar_ordinal(video_url_atual(), ord);
-  legOverlay = i;
-  legOverlayFalhas = legOverlayRecusas = 0; legOverlayRetomar = 0;
-  legOverlayTV = 1; legOverlayColhidos = 0;
-  printf("[legenda] faixa %d (%s, %s) -> app: ordinal %d; TV ate a janela ficar pronta\n",
-         i, f ? f->rotulo : "?", f ? f->codec : "?", ord);
-  fflush(stdout);
-}
-
-// Por que a faixa embutida `i` NAO vai ao overlay do app. Uma string, para o
-// log e para a folha nao divergirem.
-static const char *motivoTV(int i) {
-  const VideoFaixa *f = video_legenda(i);
-  int sond = video_mkv_sondado();
-  if (!f) return "faixa inexistente";
-  if (!video_url_atual()[0]) return "sem URL da fonte";
-  if (i == legOverlayNoGo) return "mkvass ja desistiu desta faixa nesta sessao";
-  if (sond == 2) return "fonte nao e MKV (nao ha sonda)";
-  if (sond == 0) return "sonda do cabecalho ainda nao voltou";
-  if (!f->codec[0]) return "sonda voltou sem par para esta faixa (ver [mkv] legendas da TV x arquivo)";
-  if (!ehOverlay(f)) return "codec de legenda nao suportado pelo overlay";
-  if (video_legenda_ordinal_mkv(i) < 0) return "sem ordinal no arquivo";
-  return "?";
-}
-
-// Chamada quando uma sessao de reproducao nova comeca: a legenda externa e da
-// sessao, nao do aparelho. Sem isto o titulo seguinte abriria a folha marcando
-// como ativa uma legenda que nao foi escolhida para ele.
 void faixas_reiniciar(void) {
-  legExterna = -1; legOverlay = legOverlayNoGo = legOverlayEsperando = -1; aberta = 0;
-  syncFala = 0;
-  legOverlayFalhas = legOverlayRecusas = legOverlayNoGoEstado = 0; legOverlayRetomar = 0;
-  legOverlayTV = legOverlayColhidos = 0;
-  mkvass_parar(); legenda_desligar();
-  legAuto = 1; legAutoDesde = 0;
+  legExterna=-1;aberta=syncFala=0;legAuto=1;legAutoDesde=0;
+  subtitle_engine_reset();
 }
-
-// Indice da legenda que a folha deve marcar como ATIVA.
 static int legendaAtiva(void) {
-  if (legExterna >= 0) return legExterna;
-  if (legOverlay >= 0) return legOverlay;
-  return video_legenda_atual();
+  if(legExterna>=0)return legExterna;
+  int selected=subtitle_engine_selected();
+  return selected>=0?selected:video_legenda_atual();
 }
 
 // Paineis separados: 0 = Audio, 1 = Legendas. Cada um tem cabecalho e paginas.
@@ -189,6 +98,24 @@ static int modo;
 typedef struct { char codigo[32]; char nome[72]; int total; } FxGrupo;
 static FxGrupo grupos[FX_MAX_GRUPOS];
 static int nGrupos;
+static int evidenciaLegenda(int indice) {
+  const Stream *s = stream_item(stream_atual());
+  const Legenda *l = addons_legenda(indice);
+  const char *fonte;
+  double fps;
+  int arquivoCasa, lancamentoCasa;
+  if (!s || !l) return 0;
+  fonte = s->arquivo[0] ? s->arquivo :
+          s->titulo[0] && (strstr(s->titulo, ".mkv") || strstr(s->titulo, ".mp4"))
+            ? s->titulo :
+          (strstr(s->url, ".mkv") || strstr(s->url, ".mp4")) ? s->url : NULL;
+  if (!fonte) return 0;
+  fps = video_fps_atual();
+  arquivoCasa = subtitle_release_match(fonte, l->arquivo, fps, l->fps, 1);
+  lancamentoCasa = subtitle_release_match(fonte, l->lancamento, fps, l->fps, 1);
+  if (!arquivoCasa && !lancamentoCasa) return 0;
+  return (arquivoCasa ? 2 : 1) + (fps > 0 && l->fps > 0 ? 2 : 0);
+}
 
 static int prioridadeGrupo(const FxGrupo *grupo) {
   const char *primeiro = ling_legenda(), *segundo = ling_legenda2();
@@ -269,11 +196,26 @@ static int grupoDaFaixa(int i) {
   return 0;
 }
 
+/* Uma unica legenda por idioma recebe o badge. Match pelo arquivo vale mais
+ * que release alternativo; FPS declarado desempata. Empate preserva a ordem. */
+static int melhorLegendaGrupo(int grupo) {
+  int melhor = -1, evidencia = 0;
+  for (int j = 0; j < addons_n_legendas(); j++) {
+    int i = video_n_legenda() + j;
+    int atual;
+    if (grupoDaFaixa(i) != grupo) continue;
+    atual = evidenciaLegenda(j);
+    if (atual > evidencia) { melhor = i; evidencia = atual; }
+  }
+  return melhor;
+}
+
 static int faixaDaOpcao(int grupo, int opcao) {
   if (grupo <= 0 || grupo >= nGrupos) return -1;
   if (video_n_legenda() > 0 && grupo == 1)
     return opcao >= 0 && opcao < video_n_legenda() ? opcao : -1;
-  for (int i = video_n_legenda(); i < video_n_legenda() + addons_n_legendas(); i++) {
+  for (int j = 0; j < addons_n_legendas(); j++) {
+    int i = video_n_legenda() + j;
     if (grupoDaFaixa(i) != grupo) continue;
     if (opcao-- == 0) return i;
   }
@@ -409,110 +351,22 @@ static void ajustarEstilo(int linha, int dir) {
 
 // Rotulo da linha `i` da coluna de legenda. Ate video_n_legenda() sao as
 // embutidas; depois vem as do OpenSubtitles.
-static const char *rotuloLegenda(int i, const char **marca) {
-  int emb = video_n_legenda();
-  *marca = NULL;
-  if (i < emb) {
-    const VideoFaixa *f = video_legenda(i);
-    // SELO "ASS" (#92): a faixa S_TEXT/ASS e a que o pipeline da TV desenha
-    // sem posicao e comendo eventos simultaneos. Dizer isso na folha e o que
-    // permite a pessoa preferir uma legenda externa enquanto a faixa
-    // embutida nao passa pelo overlay proprio.
-    if (i == legOverlayEsperando)
-      *marca = i18n("Incorporada (lendo o \xc3\xadndice do arquivo\xe2\x80\xa6)");
-    else if (ehOverlay(f)) {
-      if (i == legOverlay) {
-        int e = mkvass_estado();
-        *marca = legOverlayTV
-               ? i18n("A TV desenha por enquanto (o app tenta de novo\xe2\x80\xa6)")
-               : legOverlayRetomar
-               ? i18n("Incorporada (desenhada pelo app, tentando de novo\xe2\x80\xa6)")
-               : e == MKVASS_PREPARANDO
-               ? i18n("Incorporada (lendo o \xc3\xadndice do arquivo\xe2\x80\xa6)")
-               : mkvass_varredura()
-               ? i18n("Incorporada (desenhada pelo app, varrendo o arquivo)")
-               : i18n("Incorporada (desenhada pelo app)");
-      } else if (i == legOverlayNoGo) {
-        int e = legOverlayNoGoEstado;
-        *marca = e == MKVASS_NOGO_SEM_RANGE ? i18n("A TV desenha (servidor sem Range)")
-               : e == MKVASS_NOGO_HTTP     ? i18n("A TV desenha (o servidor recusou)")
-               : e == MKVASS_NOGO_NAO_MKV  ? i18n("A TV desenha (a fonte n\xc3\xa3o \xc3\xa9 MKV)")
-               : e == MKVASS_NOGO_FAIXA    ? i18n("A TV desenha (formato incompat\xc3\xadvel)")
-               : i18n("A TV desenha (arquivo sem \xc3\xadndice)");
-      } else
-        *marca = ehAss(f) ? i18n("Incorporada \xc2\xb7 ASS") : i18n("Incorporada \xc2\xb7 texto");
-    }
-    return f ? f->rotulo : "";
+static const char *rotuloLegenda(int i,const char **marca) {
+  int embedded=video_n_legenda();
+  if(i<embedded) {
+    const VideoFaixa *f=video_legenda(i);
+    *marca=subtitle_engine_selected()==i && subtitle_engine_loading()?i18n("Incorporada · carregando"):
+      ehAss(f)?i18n("Incorporada · ASS"):i18n("Incorporada");
+    return f?f->rotulo:"";
   }
-  { const Legenda *l = addons_legenda(i - emb);
-    if (!l) return "";
-    *marca = l->provedor[0] ? l->provedor : "Legenda";
-    return l->rotulo; }
+  const Legenda *l=addons_legenda(i-embedded);*marca=l&&l->provedor[0]?l->provedor:i18n("Legenda");return l?l->rotulo:"";
 }
-
-// Liga a legenda `i` da lista combinada (-1 desliga; embutidas primeiro, depois
-// as de addon). E o OK da folha, e tambem o que a legenda automatica usa: os
-// dois tem de passar pelo mesmo caminho, senao uma faixa ASS escolhida sozinha
-// iria a TV sem o overlay e sem a linha de log que a folha deixa.
 static void escolherLegenda(int i) {
-  player_leg_sincronizacao_limpar();
-  {
-    int emb = video_n_legenda();
-    const VideoFaixa *fe = (i >= 0 && i < emb) ? video_legenda(i) : NULL;
-    int vaiAoApp = fe && ehOverlay(fe) && i != legOverlayNoGo && video_url_atual()[0] &&
-                   video_legenda_ordinal_mkv(i) >= 0;
-    // Qualquer escolha encerra a colheita anterior: o fio do mkvass nao pode
-    // continuar entregando ao overlay uma faixa que a pessoa acabou de trocar.
-    // MENOS quando a escolha vai ao overlay: mkvass_iniciar_ordinal ja troca a
-    // geracao (o fio velho sai sozinho) e, se for a faixa da PRE-BUSCA (#92,
-    // v1.4.7), adota o fio vivo com o que ele ja leu antes do video — parar
-    // aqui jogaria isso fora.
-    if (!vaiAoApp) mkvass_parar();
-    legOverlay = -1; legOverlayEsperando = -1; legOverlayRetomar = 0; legOverlayTV = 0;
-    if (i < 0)        { video_escolher_legenda(-1); legenda_desligar(); legExterna = -1; }
-    else if (i < emb) {
-      const VideoFaixa *f = video_legenda(i);
-      int ord = video_legenda_ordinal_mkv(i);
-      legenda_desligar(); legExterna = -1;
-      // FAIXA DE TEXTO: o overlay do app assume. O pipeline fica com a legenda
-      // desligada e o mkvass colhe o texto do MKV a frente do playhead; se ele
-      // declarar no-go, faixas_atualizar devolve a faixa ao pipeline. Uma
-      // faixa em que ja desistimos vai direto ao pipeline.
-      //
-      // PELO ORDINAL NOS DOIS ALVOS (#92). Na LG isto passava f->numero — o
-      // trackNum da TV — como se fosse TrackNumber do Matroska, e o overlay
-      // colhia a faixa de outra lingua. O ordinal e resolvido contra as
-      // TrackEntry na sonda do cabecalho.
-      //
-      // SEM ORDINAL AINDA (sonda nao voltou): a faixa vai a TV por enquanto,
-      // a sonda e disparada ja e faixas_atualizar troca para o overlay quando
-      // ela voltar com o par. NUNCA em silencio: cada caminho deixa uma linha
-      // "[legenda] faixa N -> TV: motivo" — e a linha que faltou no #92 para
-      // separar "o app desistiu" de "a TV desenha mal".
-      if (vaiAoApp)
-        overlayAssumir(i, ord);
-      else {
-        const char *motivo = motivoTV(i);
-        if (f && i != legOverlayNoGo && video_url_atual()[0] && video_mkv_sondado() == 0) {
-          legOverlayEsperando = i;
-          video_sondar_mkv_agora();
-        }
-        printf("[legenda] faixa %d (%s, codec=%s) -> TV: %s\n", i, f ? f->rotulo : "?",
-               f && f->codec[0] ? f->codec : "?", motivo);
-        fflush(stdout);
-        video_escolher_legenda(i);
-      }
-    }
-    else {
-      const Legenda *l = addons_legenda(i - emb);
-      // So marca como ativa se houve o que aplicar: sem a URL o uMS nao recebe
-      // nada, e a folha diria "ativa" sobre uma legenda que nunca subiu.
-      if (l) {
-        /* A fonte e os 16 tamanhos agora sao nossos, nao do firmware webOS. */
-        video_escolher_legenda(-1); legenda_carregar(l->url); legExterna = i;
-      }
-    }
-  }
+  player_leg_sincronizacao_limpar();legExterna=-1;
+  if(i>=video_n_legenda()) {
+    const Legenda *l=addons_legenda(i-video_n_legenda());
+    if(l&&l->url[0]){legExterna=i;subtitle_engine_select(-1,l->url);}
+  } else subtitle_engine_select(i,NULL);
 }
 
 static void aplicar(void) {
@@ -571,12 +425,7 @@ static void legendaAutomatica(Uint32 agora) {
     fflush(stdout);
     return;
   }
-  // Ja esta nela (o arquivo marcou a faixa como padrao): nao religa — a nao
-  // ser que seja ASS com a TV desenhando: ai o overlay do app assume, que e o
-  // motivo do #92 (e o que adota a pre-busca feita antes do video).
-  if (r == legendaAtiva() &&
-      !(r < nEmb && legOverlay != r && ehOverlay(video_legenda(r)) && video_legenda_ordinal_mkv(r) >= 0))
-    return;
+  if (r == subtitle_engine_selected() || (r>=nEmb && r==legExterna)) return;
   printf("[legenda] automatica: '%s' -> %s %d (%s) aos %u ms\n", ling_legenda(),
          r < nEmb ? "embutida" : "addon", r < nEmb ? r : r - nEmb,
          r < nEmb ? emb[r] : add[r - nEmb], (unsigned)passou);
@@ -614,14 +463,11 @@ void faixas_evento(const SDL_Event *e) {
           syncAviso = 1;
         }
       } else if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
-        // legenda_cues consulta posicao + atraso: este e o sinal inverso ao
-        // atraso do HTML. Compensamos 300 ms do tempo de reacao ao controle.
+        // Delay is a single offset on the media clock; compensate for remote reaction time.
         int ajuste;
         ajuste = player_leg_sincronizar_fala(syncTempo, syncCues[syncFoco].inicio);
         if (!ajuste) { syncAviso = 3; return; }
-        player_toast(i18n(ajuste == 2
-          ? "Deriva da legenda corrigida. Repita em outra parte se necessário."
-          : "Atraso corrigido. Repita mais adiante para corrigir o FPS."), 4500);
+        player_toast(i18n("Atraso da legenda ajustado"),4500);
         syncFala = 0;
       }
     }
@@ -712,153 +558,13 @@ void faixas_evento(const SDL_Event *e) {
   }
 }
 
-static const char *motivoNoGo(int e) {
-  return e == MKVASS_NOGO_NAO_MKV    ? "nao e MKV"
-       : e == MKVASS_NOGO_SEM_RANGE  ? "servidor sem Range"
-       : e == MKVASS_NOGO_FAIXA      ? "formato de legenda incompatível"
-       : e == MKVASS_NOGO_SEM_INDICE ? "sem indice da faixa"
-       : e == MKVASS_NOGO_SEM_REL    ? "sem CueRelativePosition"
-       : e == MKVASS_NOGO_REDE       ? "rede"
-       : e == MKVASS_NOGO_HTTP       ? "servidor recusou"
-       : e == MKVASS_NOGO_RESTO      ? "servidor recusou o resto" : "?";
-}
-
-// O aviso da queda DEFINITIVA, com o motivo que o mkvass viu. Antes todo
-// no-go que nao fosse "sem Range" ou "rede" dizia "arquivo sem indice".
-static void avisarQueda(int e) {
-  char b[160]; int http = 0;
-  mkvass_ultima_falha(&http, NULL);
-  if (e == MKVASS_NOGO_HTTP && http > 0)
-    snprintf(b, sizeof b, i18n("Legenda: a TV vai desenhar (o servidor recusou: HTTP %d)"), http);
-  else
-    snprintf(b, sizeof b, "%s",
-             e == MKVASS_NOGO_SEM_RANGE ? i18n("Legenda: a TV vai desenhar (servidor sem Range)")
-             : e == MKVASS_NOGO_HTTP    ? i18n("Legenda: a TV vai desenhar (o servidor recusou)")
-             : e == MKVASS_NOGO_NAO_MKV ? i18n("Legenda: a TV vai desenhar (a fonte n\xc3\xa3o \xc3\xa9 MKV)")
-             : e == MKVASS_NOGO_FAIXA   ? i18n("Legenda: a TV vai desenhar (formato incompat\xc3\xadvel)")
-             : i18n("Legenda: a TV vai desenhar (arquivo sem \xc3\xadndice)"));
-  player_toast(b, 6000);
-}
-
-void faixas_atualizar(float dt, Uint32 agora) {
-  anim = anim_mola(anim, aberta ? 1.0f : 0.0f, dt, NV_MOLA_TELA);
+void faixas_atualizar(float dt,Uint32 agora) {
+  anim=anim_mola(anim,aberta?1.0f:0.0f,dt,NV_MOLA_TELA);
   legendaAutomatica(agora);
-  // Recuo vencido: a MESMA faixa de novo. O overlay nao foi desligado — o que
-  // ja estava colhido continua na tela, e o fio novo retoma do sidecar parcial.
-  if (legOverlay >= 0 && legOverlayRetomar && (Sint32)(agora - legOverlayRetomar) >= 0) {
-    legOverlayRetomar = 0;
-    printf("[legenda] faixa %d: nova tentativa %d do mkvass (%s)\n", legOverlay, legOverlayFalhas,
-           legOverlayTV ? "a TV desenha enquanto isso" : "overlay do app mantido");
-    fflush(stdout);
-    // Com a TV desenhando, o fio novo so religa o overlay com fala NOVA: o
-    // sidecar parcial nao volta por cima da legenda da TV.
-    if (legOverlayTV) mkvass_retomar_segurando(); else mkvass_retomar();
-  }
-  // O Enhanced troca de renderer depois de instalar a janela extraida.
-  // Verificamos a mesma janela no tempo de ARQUIVO usado pelo desenho (inclui
-  // o ajuste de sincronizacao), para que o seek nao mostre falas atrasadas.
-  if (legOverlay >= 0) {
-    int col = 0, e = mkvass_estado();
-    double posArquivo = player_leg_tempo_arquivo(player_posicao_legenda_seg());
-    // Entrar exige folga para a rede. Depois de entrar, uma janela menor
-    // evita piscar entre TV e app na fronteira do proximo bloco.
-    int pronta = mkvass_janela_pronta(posArquivo, legOverlayTV ? 12.0 : 2.0);
-    mkvass_estatisticas(NULL, NULL, &col, NULL);
-    if (!pronta && !legOverlayTV) {
-      // Seek para trecho ainda nao extraido: nenhuma fala deve chegar tarde.
-      legOverlayTV = 1;
-      video_escolher_legenda(legOverlay);
-      printf("[legenda] faixa %d: janela nao pronta em %.1fs; TV assume durante a leitura\n",
-             legOverlay, player_posicao_legenda_seg());
-      fflush(stdout);
-    } else if (pronta && legOverlayTV) {
-      video_escolher_legenda(-1);
-      legOverlayTV = 0;
-      printf("[legenda] faixa %d: janela pronta em %.1fs (%d blocos); app assume\n",
-             legOverlay, player_posicao_legenda_seg(), col);
-      fflush(stdout);
-    }
-    if (pronta && (e == MKVASS_COMPLETO || col > legOverlayColhidos)) {
-      legOverlayFalhas = 0;
-      legOverlayColhidos = col;
-    }
-  }
-  // O mkvass declarou no-go. Passageiro: agenda outra tentativa — sempre — e
-  // a faixa fica com o app nas primeiras; depois a TV desenha por enquanto.
-  // Definitivo: devolve a faixa ao pipeline da TV de vez, e a folha diz por
-  // que. Polling por quadro e o que ha: o no-go nasce num fio de rede e este
-  // modulo nao tem callback — e uma comparacao de inteiro.
-  if (legOverlay >= 0 && !legOverlayRetomar && mkvass_nogo()) {
-    int i = legOverlay, e = mkvass_estado(), http = 0, curl = 0, col = 0;
-    long recuo = mkvass_recuo_ms(e, legOverlayFalhas, legOverlayRecusas);
-    mkvass_ultima_falha(&http, &curl);
-    mkvass_estatisticas(NULL, NULL, &col, NULL);
-    if (recuo > 0) {
-      legOverlayFalhas++;
-      if (e == MKVASS_NOGO_SEM_RANGE) legOverlayRecusas++;
-      legOverlayRetomar = (agora + (Uint32)recuo) | 1u;
-      if (col > legOverlayColhidos) legOverlayColhidos = col;
-      printf("[legenda] mkvass falha PASSAGEIRA %d (%s, HTTP %d, curl %d) na faixa %d: tentativa %d em %ld ms, %s\n",
-             e, motivoNoGo(e), http, curl, i, legOverlayFalhas, recuo,
-             legOverlayTV ? "a TV segue desenhando por enquanto" : "overlay do app mantido");
-      // Recuo LONGO, e dito com todas as letras: o registro do relato mostrava
-      // tentativas a 2 s e 5 s batendo na mesma recusa.
-      if (e == MKVASS_NOGO_RESTO)
-        printf("[mkvass] servidor recusou o resto: esperando %ld s\n", recuo / 1000);
-      fflush(stdout);
-      // Sem nada colhido nao ha o que manter no overlay; depois de
-      // MKVASS_TENTATIVAS_OVERLAY tentativas sem fala nova, a pessoa ja
-      // ficou tempo demais sem legenda. Nos dois casos a TV desenha POR
-      // ENQUANTO, e a tentativa seguinte que entregar traz a faixa de volta.
-      if (!legOverlayTV && (col == 0 || legOverlayFalhas > MKVASS_TENTATIVAS_OVERLAY)) {
-        legOverlayTV = 1;
-        printf("[legenda] faixa %d: a TV desenha POR ENQUANTO (%d colhidos), o app segue tentando\n", i, col);
-        fflush(stdout);
-        player_toast(i18n("Legenda: a TV desenha por enquanto (falha de rede); o app tenta de novo"), 6000);
-        video_escolher_legenda(i);
-      }
-    } else {
-      int estavaNaTV = legOverlayTV;
-      legOverlay = -1; legOverlayNoGo = i; legOverlayNoGoEstado = e; legOverlayTV = 0;
-      printf("[legenda] mkvass no-go %d (%s, HTTP %d, curl %d) na faixa %d: a legenda VOLTA para a TV "
-             "(nativa religada)\n", e, motivoNoGo(e), http, curl, i);
-      fflush(stdout);
-      // Aviso na tela: antes a queda era muda e a pessoa so via a legenda
-      // piscar e cortar, sem saber que o app tinha desistido.
-      avisarQueda(e);
-      // O overlay tinha o que colheu antes de desistir: sai, senao a TV e o
-      // app desenhariam a mesma fala.
-      legenda_desligar();
-      if (!estavaNaTV) video_escolher_legenda(i);
-    }
-  }
-  // A sonda voltou para uma faixa escolhida antes dela: agora da para decidir.
-  if (legOverlayEsperando >= 0) {
-    int i = legOverlayEsperando;
-    const VideoFaixa *f = video_legenda(i);
-    video_sondar_mkv_agora();          // se o sourceInfo chegou depois da escolha
-    if (video_mkv_sondado() != 0) {
-      int ord = video_legenda_ordinal_mkv(i);
-      legOverlayEsperando = -1;
-      if (f && ehOverlay(f) && ord >= 0 && video_legenda_atual() == i && video_url_atual()[0]) {
-        printf("[legenda] sonda voltou: faixa %d compatível, o app assume\n", i);
-        overlayAssumir(i, ord);
-      } else {
-        printf("[legenda] sonda voltou: faixa %d (%s, codec=%s) fica na TV: %s\n", i,
-               f ? f->rotulo : "?", f && f->codec[0] ? f->codec : "?", motivoTV(i));
-        fflush(stdout);
-        // Sem par no arquivo e uma falha do casamento, nao da TV: avisa, para
-        // a pessoa poder mandar o log em vez de achar que a legenda e assim.
-        if (f && !f->codec[0] && video_mkv_sondado() == 1)
-          player_toast(i18n("Legenda: n\xc3\xa3o deu para casar as faixas com o arquivo; a TV desenha"), 6000);
-      }
-    }
-  }
+  subtitle_engine_tick(player_posicao_legenda_seg(), player_leg_estilo()->atrasoMs);
+  if(subtitle_engine_take_error())player_toast(i18n("Não foi possível carregar esta legenda"),5000);
 }
 
-// Traz a linha focada para dentro da janela visivel, mexendo o MINIMO: so
-// quando o foco passa de uma das bordas. Rolar sempre para centralizar faria a
-// lista inteira andar a cada tecla, que num D-pad e desorientador.
 static void ajustarRolagem(void) {
   int n = nLinhas(coluna), f = foco[coluna], *r = &rolagem[coluna];
   if (visiveis < 1) return;
@@ -870,7 +576,7 @@ static void ajustarRolagem(void) {
 
 static void linhaPainel(float x, float y, float w, const char *rot,
                          const char *sub, int focado, int ativo, int apagado,
-                         float a) {
+                         int recomendado, float a) {
   GfxRect r = { x, y, w, 70 };
   float fr, fg, fb;
   corFocoFaixa(&fr, &fg, &fb);
@@ -880,12 +586,21 @@ static void linhaPainel(float x, float y, float w, const char *rot,
   } else if (ativo) gfx_cor(r, .27f, fr, fg, fb, .13f * a);
   int c = focado ? ajustes_tinta_foco() : apagado ? 128 : 245;
   int s = focado ? ajustes_tinta_foco2() : apagado ? 112 : 170;
-  float textoW = w - (ativo ? 104 : 52);
+  float textoW = w - (recomendado > 0 ? (ativo ? 222 : 182) : (ativo ? 104 : 52));
   txt_desenhar_alpha(txt_linha_corta(TXT_BODY, rot, c,c,c,255,textoW),
                     x+22, y+(sub && *sub ? 6 : 19), a);
   if (sub && *sub)
     txt_desenhar_alpha(txt_linha_corta(TXT_PG_FIM, sub, s,s,s,255,textoW),
                       x+22, y+37, a);
+  if (recomendado > 0) {
+    float bx = x+w-(ativo ? 202.f : 164.f);
+    GfxRect selo = {bx,y+17,142,36};
+    gfx_cor(selo,.24f,.10f,.75f,.24f,.24f*a);
+    gfx_anel(selo,.24f,1,.14f,.94f,.35f,.82f*a);
+    TxtLinha texto = txt_linha(TXT_PG_ROTULO,i18n("Recomendada"),
+                               130,244,160,255);
+    txt_desenhar_alpha(texto,bx+(142-texto.w)*.5f,y+21,a);
+  }
   if (ativo)
     txt_desenhar_alpha(txt_linha(TXT_BODY,"✓",c,c,c,255),x+w-43,y+17,a);
 }
@@ -895,7 +610,7 @@ static void linhaEstilo(float x, float y, float w, int i, int focado, float a) {
   int apagado = 0;
   valorEstilo(i,valor,sizeof valor);
   if (i == 8 || i == FX_N_ESTILO-1) {
-    linhaPainel(x,y,w,i18n(EST_ROT[i]),valor,focado,0,apagado,a);
+    linhaPainel(x,y,w,i18n(EST_ROT[i]),valor,focado,0,apagado,-1,a);
     return;
   }
   GfxRect menos = {x+8,y+9,52,52}, mais = {x+w-60,y+9,52,52};
@@ -968,10 +683,10 @@ void faixas_desenhar(Uint32 agora) {
   float inicio = y+116, fim = y+h-28;
   if (paginaMix) {
     linhaPainel(contentX,inicio,contentW,i18n("Amplificação de áudio"),
-                i18n("Indisponível neste dispositivo"),0,0,1,a);
+                i18n("Indisponível neste dispositivo"),0,0,1,-1,a);
     linhaPainel(contentX,inicio+FX_LINHA,contentW,
                 i18n("Salvar amplificação: Desligado"),
-                i18n("A mixagem não está disponível no player nativo"),0,0,1,a);
+                i18n("A mixagem não está disponível no player nativo"),0,0,1,-1,a);
     return;
   }
   if (paginaEstilo) {
@@ -993,7 +708,7 @@ void faixas_desenhar(Uint32 agora) {
       if (!syncCapturado) {
         const char *aviso = syncAviso
           ? i18n("Sem falas disponíveis. Escolha uma legenda renderizada pelo app.")
-          : i18n("Aperte OK no início da fala e escolha-a. Repita mais adiante para corrigir a deriva.");
+          : i18n("Aperte OK no início da fala e escolha a fala correspondente.");
         txt_bloco(TXT_BODY,aviso,205,205,210,caixa.x+56,caixa.y+180,
                   caixa.w-112,42,a,3);
       } else {
@@ -1038,7 +753,7 @@ void faixas_desenhar(Uint32 agora) {
       const VideoFaixa *f = video_audio(i);
       linhaPainel(contentX,inicio+(i-rolagem[0])*FX_LINHA,contentW,
                    f ? f->rotulo : "",f ? i18n(ling_nome(f->idioma)) : "",
-                   !focoCabecalho && foco[0]==i,i==video_audio_atual(),0,a);
+                   !focoCabecalho && foco[0]==i,i==video_audio_atual(),0,-1,a);
     }
     gfx_sem_recorte();
     if (!nAudio)
@@ -1058,7 +773,7 @@ void faixas_desenhar(Uint32 agora) {
     else sub[0]=0;
     linhaPainel(contentX,inicio+(g-rolagemIdioma)*FX_LINHA,contentW,
                 grupos[g].nome,sub,!focoCabecalho && !focoOpcoes && focoIdioma==g,
-                g==ativoGrupo,0,a);
+                g==ativoGrupo,0,-1,a);
   }
   gfx_sem_recorte();
   if (focoIdioma <= 0) return;
@@ -1069,14 +784,16 @@ void faixas_desenhar(Uint32 agora) {
   if (focoOpcao >= grupos[focoIdioma].total) focoOpcao = grupos[focoIdioma].total-1;
   if (focoOpcao < 0) focoOpcao = 0;
   rolagemOpcao = rolarPara(focoOpcao,grupos[focoIdioma].total,optsVis,rolagemOpcao);
+  int melhor = melhorLegendaGrupo(focoIdioma);
   gfx_recorte(contentX,optsY,contentW,fim-optsY);
   for (int o=rolagemOpcao; o<grupos[focoIdioma].total && o<rolagemOpcao+optsVis; o++) {
     int i = faixaDaOpcao(focoIdioma,o);
     const char *marca = NULL, *rot = rotuloLegenda(i,&marca);
     if (!marca) marca = i < video_n_legenda() ? i18n("Incorporada") : "OpenSubtitles";
+    int recomendado = i == melhor;
     linhaPainel(contentX,optsY+(o-rolagemOpcao)*FX_LINHA,contentW,
                 rot,marca,!focoCabecalho && focoOpcoes && focoOpcao==o,
-                i==legendaAtiva(),0,a);
+                i==legendaAtiva(),0,recomendado,a);
   }
   gfx_sem_recorte();
 }

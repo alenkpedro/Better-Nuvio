@@ -1,379 +1,277 @@
 #include "progresso.h"
 #include "dados.h"
 #include "perfis.h"
+#include "js.h"
+#include "jsw.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <sys/time.h>
 
-#define ARQ "progresso.txt"
-#define CABECALHO "#nvprog2"
+/* New repository: durable revisions and deletion outbox, profile-scoped.
+ * Reference: NuvioTVSmart/watchProgressSyncService + NuvioTV/WatchProgress.
+ * The former TSV is read only by the one-time data importer below. */
+#define STORE "watch-progress-v3.json"
+static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+static ProgRegistro rows[PROG_MAX];
+static int count, loaded;
+static unsigned version;
+static uint64_t sequence;
+static long long (*testClock)(void);
 
-// Dois fios tocam aqui: o principal (player fechando, olho, pos-play, catalogo
-// reaplicando) e o do sync (pendentes para o push, marcar empurrados). Um
-// mutex por chamada publica; as funcoes internas assumem o mutex tomado.
-static pthread_mutex_t tranca = PTHREAD_MUTEX_INITIALIZER;
-#define TRANCAR()   pthread_mutex_lock(&tranca)
-#define DESTRANCAR() pthread_mutex_unlock(&tranca)
-
-static ProgRegistro regs[PROG_MAX];
-static int nRegs;
-static int carregado;
-static long long (*relogio)(void);
-
-static long long relogioPadrao(void) {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+long long prog_agora_ms(void) {
+  struct timeval t;
+  if (testClock) return testClock();
+  gettimeofday(&t, NULL);
+  return (long long)t.tv_sec * 1000 + t.tv_usec / 1000;
 }
+void prog_definir_relogio(long long (*fn)(void)) { testClock = fn; }
 
-long long prog_agora_ms(void) { return relogio ? relogio() : relogioPadrao(); }
-void prog_definir_relogio(long long (*r)(void)) { relogio = r; }
-void prog_invalidar(void) { TRANCAR(); carregado = 0; nRegs = 0; DESTRANCAR(); }
-
-// ------------------------------------------------------------ identidade (sem estado)
-
-void prog_content_id(char *dst, unsigned n, const char *imdb, int *temporada, int *episodio) {
-  const char *ultimo, *anterior = NULL, *p;
-  char *fim;
-  long t = 0, e = 0;
-  if (!dst || !n) return;
+void prog_content_id(char *dst, unsigned cap, const char *id, int *season, int *episode) {
+  const char *end, *previous = NULL;
+  size_t length;
+  if (!dst || !cap) return;
   dst[0] = 0;
-  if (!imdb) return;
-  // So ":temporada:episodio" e um sufixo de progresso. IDs de catalogo
-  // como "tmdb:123" ou "cs:channel:..." conservam todos os seus segmentos.
-  ultimo = strrchr(imdb, ':');
-  if (ultimo) for (p = ultimo; p > imdb; ) {
-    --p;
-    if (*p == ':') { anterior = p; break; }
-  }
-  if (anterior) {
-    t = strtol(anterior + 1, &fim, 10);
-    if (fim != ultimo || t < 0 || t > 9999) anterior = NULL;
-    else {
-      e = strtol(ultimo + 1, &fim, 10);
-      if (*fim || e <= 0 || e > 99999) anterior = NULL;
+  if (!id || !*id) return;
+  length = strlen(id);
+  end = strrchr(id, ':');
+  if (end) for (const char *p = end; p > id;) if (*--p == ':') { previous = p; break; }
+  if (previous) {
+    char *a, *b;
+    long s = strtol(previous + 1, &a, 10), e = strtol(end + 1, &b, 10);
+    if (a == end && a > previous + 1 && b > end + 1 && !*b && s >= 0 && s <= 9999 && e > 0 && e <= 99999) {
+      length = (size_t)(previous - id);
+      if (season) *season = (int)s;
+      if (episode) *episode = (int)e;
     }
   }
-  if (anterior) {
-    unsigned L = (unsigned)(anterior - imdb);
-    if (L >= n) L = n - 1;
-    memcpy(dst, imdb, L);
-    dst[L] = 0;
-    if (temporada && episodio) { *temporada = (int)t; *episodio = (int)e; }
-  } else {
-    snprintf(dst, n, "%s", imdb);
-  }
+  if (length >= cap) length = cap - 1;
+  memcpy(dst, id, length); dst[length] = 0;
 }
-
-void prog_chave(char *dst, unsigned n, const char *contentId, int temporada, int episodio) {
-  char id[24];
-  if (!dst || !n) return;
-  prog_content_id(id, sizeof id, contentId, NULL, NULL);
-  if (id[0] && temporada >= 0 && episodio > 0)
-    snprintf(dst, n, "%s_s%de%d", id, temporada, episodio);
-  else
-    snprintf(dst, n, "%s", id);
+void prog_chave(char *dst, unsigned cap, const char *id, int season, int episode) {
+  char parent[64];
+  prog_content_id(parent, sizeof parent, id, NULL, NULL);
+  if (episode > 0 && season >= 0) snprintf(dst, cap, "%s_s%de%d", parent, season, episode);
+  else snprintf(dst, cap, "%s", parent);
 }
-
-// ------------------------------------------------------------ disco (mutex tomado)
-
-// Linha do formato ANTIGO: "imdb pos dur [temp ep]" (separado por tab ou
-// espaco), escrita por catalogo.c. `imdb` podia ser composto ("tt123:4:9").
-static int lerLinhaAntiga(const char *linha, ProgRegistro *r) {
-  char id[40];
-  double pos, dur;
-  int temp = 0, ep = 0, n;
-  n = sscanf(linha, "%39s %lf %lf %d %d", id, &pos, &dur, &temp, &ep);
-  if (n < 3 || dur <= 1.0) return 0;
-  memset(r, 0, sizeof *r);
-  { int tI = 0, eI = 0;
-    prog_content_id(r->contentId, sizeof r->contentId, id, &tI, &eI);
-    // Colunas 4-5 ganham; o id composto e o fallback.
-    if (!(temp >= 0 && ep > 0)) { temp = tI; ep = eI; } }
-  if (!r->contentId[0]) return 0;
-  r->temporada = ep > 0 ? temp : 0;
-  r->episodio  = ep > 0 ? ep : 0;
-  snprintf(r->tipo, sizeof r->tipo, "%s", ep > 0 ? "series" : "movie");
+static int normalize(ProgRegistro *r) {
+  char parent[64]; int s = 0, e = 0;
+  if (!r || !r->contentId[0] || r->perfil < 1 || !isfinite(r->posSeg) || !isfinite(r->durSeg)) return 0;
+  prog_content_id(parent, sizeof parent, r->contentId, &s, &e);
+  snprintf(r->contentId, sizeof r->contentId, "%s", parent);
+  if (r->episodio <= 0 && e > 0) { r->temporada = s; r->episodio = e; }
+  if (r->episodio <= 0) r->temporada = r->episodio = 0;
+  if (r->temporada < 0) r->temporada = 0;
+  if (r->posSeg < 0) r->posSeg = 0;
+  if (r->durSeg < 0) r->durSeg = 0;
+  if (!isfinite(r->percentual) || r->percentual < 0 || r->percentual > 100) r->percentual = -1;
+  if (!r->tipo[0]) snprintf(r->tipo, sizeof r->tipo, "%s", r->episodio > 0 ? "series" : "movie");
   prog_chave(r->chave, sizeof r->chave, r->contentId, r->temporada, r->episodio);
-  r->posSeg = pos;
-  r->durSeg = dur;
-  r->lastWatchedMs = 0;
-  r->pendente = 1;        // nunca foi empurrado com a chave certa
-  r->perfil = perfis_ativo();
-  return 1;
+  return r->contentId[0] != 0;
 }
-
-// Linha do formato NOVO (10 colunas, tab):
-// perfil chave contentId tipo temp ep posSeg durSeg lastMs pendente
-static int lerLinhaNova(const char *linha, ProgRegistro *r) {
-  int n;
-  memset(r, 0, sizeof *r);
-  n = sscanf(linha, "%d\t%47s\t%23s\t%7s\t%d\t%d\t%lf\t%lf\t%lld\t%d",
-             &r->perfil, r->chave, r->contentId, r->tipo,
-             &r->temporada, &r->episodio, &r->posSeg, &r->durSeg,
-             &r->lastWatchedMs, &r->pendente);
-  if (n != 10 || !r->chave[0] || !r->contentId[0]) return 0;
-  return 1;
+double prog_fracao(const ProgRegistro *r) {
+  if (!r) return 0;
+  double f = r->durSeg > 0 ? r->posSeg / r->durSeg : r->percentual > 0 ? r->percentual / 100.0 : r->posSeg >= 1 ? .05 : 0;
+  return f < 0 ? 0 : f > 1 ? 1 : f;
 }
-
-static void carregar(void) {
-  char *buf, *linha, *ctx;
-  int novo = 0;
-  if (carregado) return;
-  carregado = 1;
-  nRegs = 0;
-  buf = dados_ler(ARQ);
-  if (!buf) return;
-  for (linha = strtok_r(buf, "\n", &ctx); linha && nRegs < PROG_MAX;
-       linha = strtok_r(NULL, "\n", &ctx)) {
-    ProgRegistro r;
-    if (!linha[0] || linha[0] == '\r') continue;
-    if (!strncmp(linha, CABECALHO, strlen(CABECALHO))) { novo = 1; continue; }
-    if (novo ? lerLinhaNova(linha, &r) : lerLinhaAntiga(linha, &r)) {
-      // Duplicata (mesmo perfil e chave) fica com a mais nova.
-      int i, dup = -1;
-      for (i = 0; i < nRegs; i++)
-        if (regs[i].perfil == r.perfil && !strcmp(regs[i].chave, r.chave)) { dup = i; break; }
-      if (dup >= 0) {
-        if (r.lastWatchedMs >= regs[dup].lastWatchedMs) regs[dup] = r;
-      } else {
-        regs[nRegs++] = r;
-      }
-    }
-  }
-  free(buf);
-  if (!novo && nRegs) printf("[progresso] %d linhas migradas do formato antigo\n", nRegs);
+int prog_concluido(const ProgRegistro *r) { return r && !r->removido && prog_fracao(r) >= .90; }
+int prog_andamento(const ProgRegistro *r) {
+  return r && !r->removido && (r->durSeg <= 0 || r->durSeg >= 60) && prog_fracao(r) >= .02 && !prog_concluido(r);
 }
-
-static int gravar(void) {
-  // 10 colunas curtas cabem folgadas em 160 bytes por linha.
-  size_t tam = (size_t)nRegs * 160 + 64;
-  char *buf = malloc(tam), *p;
-  int i, ok;
-  if (!buf) return 0;
-  p = buf;
-  p += sprintf(p, "%s\n", CABECALHO);
-  for (i = 0; i < nRegs; i++) {
-    const ProgRegistro *r = &regs[i];
-    p += sprintf(p, "%d\t%s\t%s\t%s\t%d\t%d\t%.0f\t%.0f\t%lld\t%d\n",
-                 r->perfil, r->chave, r->contentId, r->tipo,
-                 r->temporada, r->episodio, r->posSeg, r->durSeg,
-                 r->lastWatchedMs, r->pendente ? 1 : 0);
-  }
-  ok = dados_gravar(ARQ, buf);
-  free(buf);
-  return ok;
-}
-
-// Quando o arquivo esta cheio, sai a linha NAO pendente mais antiga. Pendente
-// nunca sai: e informacao que so este aparelho tem.
-static int abrirVaga(void) {
-  int i, alvo = -1;
-  if (nRegs < PROG_MAX) return nRegs;
-  for (i = 0; i < nRegs; i++) {
-    if (regs[i].pendente) continue;
-    if (alvo < 0 || regs[i].lastWatchedMs < regs[alvo].lastWatchedMs) alvo = i;
-  }
-  return alvo;
-}
-
-static int achar(int perfil, const char *chave) {
-  int i;
-  for (i = 0; i < nRegs; i++)
-    if (regs[i].perfil == perfil && !strcmp(regs[i].chave, chave)) return i;
+static int find(int profile, const char *key) {
+  for (int i = 0; i < count; i++) if (rows[i].perfil == profile && !strcmp(rows[i].chave, key)) return i;
   return -1;
 }
-
-static int maisNovoPrimeiro(const void *a, const void *b) {
-  const ProgRegistro *x = a, *y = b;
-  if (x->lastWatchedMs != y->lastWatchedMs) return x->lastWatchedMs < y->lastWatchedMs ? 1 : -1;
-  return strcmp(x->chave, y->chave);
+static int slot(void) {
+  if (count < PROG_MAX) return count++;
+  int oldest = -1;
+  for (int i = 0; i < count; i++) if (!rows[i].pendente && (oldest < 0 || rows[i].lastWatchedMs < rows[oldest].lastWatchedMs)) oldest = i;
+  return oldest;
 }
-
-// ------------------------------------------------------------ leitura
-
-int prog_ler(ProgRegistro *saida, int max) {
-  int i, k = 0, perfil = perfis_ativo();
-  TRANCAR();
-  carregar();
-  for (i = 0; i < nRegs && k < max; i++)
-    if (regs[i].perfil == perfil) saida[k++] = regs[i];
-  DESTRANCAR();
-  qsort(saida, (size_t)k, sizeof *saida, maisNovoPrimeiro);
-  return k;
+#define STR(dst, src, key) js_texto(src, js_fim(src), key, dst, sizeof dst)
+static void readRow(const char *p, ProgRegistro *r) {
+  const char *f = js_fim(p);
+  memset(r, 0, sizeof *r); r->percentual = -1;
+  r->perfil = (int)js_num(p,f,"profile",1);
+  STR(r->contentId,p,"contentId"); STR(r->tipo,p,"type"); STR(r->videoId,p,"videoId");
+  STR(r->titulo,p,"title"); STR(r->nomeEpisodio,p,"episodeTitle");
+  STR(r->poster,p,"poster"); STR(r->backdrop,p,"backdrop"); STR(r->logo,p,"logo");
+  r->temporada=(int)js_num(p,f,"season",0); r->episodio=(int)js_num(p,f,"episode",0);
+  r->posSeg=js_num(p,f,"positionMs",0)/1000; r->durSeg=js_num(p,f,"durationMs",0)/1000;
+  r->lastWatchedMs=(long long)js_num(p,f,"updatedAt",0);
+  r->percentual=js_num(p,f,"progressPercent",-1);
+  r->pendente=(int)js_num(p,f,"pending",0); r->removido=(int)js_num(p,f,"deleted",0);
+  r->revisao=(uint64_t)js_num(p,f,"revision",0); r->remotoMs=(long long)js_num(p,f,"remoteAt",0);
 }
-
-int prog_por_chave(const char *chave, ProgRegistro *saida) {
-  int i;
-  if (!chave || !*chave) return 0;
-  TRANCAR();
-  carregar();
-  i = achar(perfis_ativo(), chave);
-  if (i >= 0 && saida) *saida = regs[i];
-  DESTRANCAR();
-  return i >= 0;
-}
-
-int prog_pendentes(ProgRegistro *saida, int max) {
-  int i, k = 0, perfil = perfis_ativo();
-  TRANCAR();
-  carregar();
-  for (i = 0; i < nRegs && k < max; i++)
-    if (regs[i].perfil == perfil && regs[i].pendente) saida[k++] = regs[i];
-  DESTRANCAR();
-  return k;
-}
-
-// ------------------------------------------------------------ escrita
-
-int prog_gravar_local(const char *imdb, int temporada, int episodio,
-                      double posSeg, double durSeg) {
-  ProgRegistro r;
-  int i, ok;
-  if (!imdb || !*imdb || durSeg <= 1.0) return 0;
-  memset(&r, 0, sizeof r);
-  { int tI = 0, eI = 0;
-    prog_content_id(r.contentId, sizeof r.contentId, imdb, &tI, &eI);
-    if (!(episodio > 0)) { temporada = tI; episodio = eI; } }
-  if (!r.contentId[0]) return 0;
-  r.perfil = perfis_ativo();
-  r.temporada = episodio > 0 ? temporada : 0;
-  r.episodio  = episodio > 0 ? episodio : 0;
-  snprintf(r.tipo, sizeof r.tipo, "%s", episodio > 0 ? "series" : "movie");
-  prog_chave(r.chave, sizeof r.chave, r.contentId, r.temporada, r.episodio);
-  r.posSeg = posSeg < 0 ? 0 : posSeg;
-  r.durSeg = durSeg;
-  r.lastWatchedMs = prog_agora_ms();
-  r.pendente = 1;
-  TRANCAR();
-  carregar();
-  i = achar(r.perfil, r.chave);
-  if (i < 0) { i = abrirVaga(); if (i >= 0 && i == nRegs) nRegs++; }
-  if (i < 0) { DESTRANCAR(); return 0; }
-  regs[i] = r;
-  ok = gravar();
-  DESTRANCAR();
-  return ok;
-}
-
-int prog_aplicar_remoto(const ProgRegistro *rem) {
-  ProgRegistro r;
-  int i;
-  if (!rem || !rem->contentId[0] ||
-      (rem->durSeg <= 1.0 && !(rem->episodio > 0 && rem->posSeg >= 60.0 &&
-                               rem->posSeg < 4.0 * 3600.0))) return 0;
-  r = *rem;
-  r.perfil = perfis_ativo();
-  r.pendente = 0;
-  if (!r.chave[0]) prog_chave(r.chave, sizeof r.chave, r.contentId, r.temporada, r.episodio);
-  if (!r.tipo[0]) snprintf(r.tipo, sizeof r.tipo, "%s", r.episodio > 0 ? "series" : "movie");
-  TRANCAR();
-  carregar();
-  i = achar(r.perfil, r.chave);
-  if (i >= 0) {
-    if (regs[i].pendente || r.lastWatchedMs <= regs[i].lastWatchedMs) { DESTRANCAR(); return 0; }
-  } else {
-    i = abrirVaga();
-    if (i < 0) { DESTRANCAR(); return 0; }
-    if (i == nRegs) nRegs++;
+static int persist(void) {
+  Jsw w; jsw_iniciar(&w); jsw_arr_ini(&w);
+  for (int i=0;i<count;i++) {
+    const ProgRegistro *r=&rows[i]; jsw_obj_ini(&w);
+    jsw_ci(&w,"profile",r->perfil); jsw_cs(&w,"contentId",r->contentId); jsw_cs(&w,"type",r->tipo);
+    jsw_cs(&w,"videoId",r->videoId); jsw_ci(&w,"season",r->temporada); jsw_ci(&w,"episode",r->episodio);
+    jsw_ci(&w,"positionMs",(long long)llround(r->posSeg*1000)); jsw_ci(&w,"durationMs",(long long)llround(r->durSeg*1000));
+    jsw_ci(&w,"updatedAt",r->lastWatchedMs); jsw_ci(&w,"progressPercent",(long long)r->percentual);
+    jsw_ci(&w,"pending",r->pendente); jsw_ci(&w,"deleted",r->removido); jsw_ci(&w,"revision",r->revisao);
+    jsw_ci(&w,"remoteAt",r->remotoMs); jsw_cs(&w,"title",r->titulo); jsw_cs(&w,"episodeTitle",r->nomeEpisodio);
+    jsw_cs(&w,"poster",r->poster); jsw_cs(&w,"backdrop",r->backdrop); jsw_cs(&w,"logo",r->logo); jsw_obj_fim(&w);
   }
-  regs[i] = r;
-  gravar();
-  DESTRANCAR();
-  return 1;
+  jsw_arr_fim(&w); int ok=!w.erro && dados_gravar(STORE,jsw_texto_final(&w)); jsw_livre(&w); return ok;
 }
-
-void prog_marcar_empurrados(const char *const *chaves, int n) {
-  int i, k, perfil = perfis_ativo(), mudou = 0;
-  TRANCAR();
-  carregar();
-  for (k = 0; k < n; k++) {
-    if (!chaves[k]) continue;
-    i = achar(perfil, chaves[k]);
-    if (i >= 0 && regs[i].pendente) { regs[i].pendente = 0; mudou = 1; }
+static void importLegacy(void) {
+  char *body=dados_ler("progresso.txt"), *save=NULL;
+  if (!body) return;
+  int v2=!strncmp(body,"#nvprog2",8);
+  for (char *line=strtok_r(body,"\n",&save);line;line=strtok_r(NULL,"\n",&save)) {
+    if (*line=='#') continue;
+    ProgRegistro r; memset(&r,0,sizeof r); r.percentual=-1;
+    int got;
+    if (v2) {
+      char *fields[12], *p=line; int n=0;
+      fields[n++]=p; while (*p && n<12) { if (*p=='\t') { *p=0; fields[n++]=p+1; } p++; }
+      if (n<10) continue;
+      r.perfil=atoi(fields[0]); snprintf(r.contentId,sizeof r.contentId,"%s",fields[2]);
+      snprintf(r.tipo,sizeof r.tipo,"%s",fields[3]); r.temporada=atoi(fields[4]); r.episodio=atoi(fields[5]);
+      r.posSeg=strtod(fields[6],NULL);r.durSeg=strtod(fields[7],NULL);r.lastWatchedMs=strtoll(fields[8],NULL,10);r.pendente=atoi(fields[9]);
+      if(n>10 && strcmp(fields[10],"-")) snprintf(r.poster,sizeof r.poster,"%s",fields[10]);
+      if(n>11 && strcmp(fields[11],"-")) snprintf(r.backdrop,sizeof r.backdrop,"%s",fields[11]);
+    } else {
+      r.perfil=perfis_ativo(); r.pendente=1;
+      got=sscanf(line,"%63s %lf %lf %d %d",r.contentId,&r.posSeg,&r.durSeg,&r.temporada,&r.episodio);
+      if(got<3) continue;
+    }
+    if(!normalize(&r)) continue;
+    int i=find(r.perfil,r.chave); if(i>=0 && rows[i].lastWatchedMs>r.lastWatchedMs) continue;
+    if(i<0)i=slot(); if(i<0)break;
+    r.revisao=++sequence; r.remotoMs=r.pendente?0:r.lastWatchedMs;rows[i]=r;
   }
-  if (mudou) gravar();
-  DESTRANCAR();
+  free(body);
 }
-
-void prog_remover(const char *chave) {
-  int i;
-  if (!chave || !*chave) return;
-  TRANCAR();
-  carregar();
-  i = achar(perfis_ativo(), chave);
-  if (i >= 0) { regs[i] = regs[--nRegs]; gravar(); }
-  DESTRANCAR();
+static void load(void) {
+  if(loaded)return; loaded=1;count=0;
+  char *body=dados_ler(STORE);
+  if(body) {
+    const char *p=js_raiz_array(body);
+    for(;p && count<PROG_MAX;p=js_prox(js_fim(p))) {
+      ProgRegistro r;readRow(p,&r);if(!normalize(&r))continue;
+      int i=find(r.perfil,r.chave);if(i<0)i=slot();if(i<0)break;
+      if(r.revisao>sequence)sequence=r.revisao;rows[i]=r;
+    }
+    free(body);
+  } else { importLegacy();persist(); }
 }
-
-// --- REMOCOES DE "CONTINUAR ASSISTINDO" ---------------------------------------
-//
-// SO EM MEMORIA, e de proposito. A janela que isto cobre e a do DELETE em voo
-// e a do servidor que ainda nao refletiu (segundos, no pior caso o ciclo de
-// sync seguinte). Numa abertura nova do app os tres servidores ja receberam o
-// DELETE — ou ele falhou, e ai mostrar o card de volta e a verdade, e a pessoa
-// tira de novo. Persistir exigiria um formato novo em progresso.txt, que o
-// push para a conta le linha a linha como progresso (prog_pendentes).
-//
-// 32 cabem com folga: a fileira mostra 12, e ninguem tira mais que isso numa
-// sessao. Cheio, a vaga mais velha e reaproveitada — e a que o servidor ja
-// teve mais tempo de refletir.
-#define PROG_REMOVIDOS_MAX 32
-static struct { int perfil; char obra[24]; long long ms; } removidos[PROG_REMOVIDOS_MAX];
-static int nRemovidos;
-
-void prog_marcar_removido(const char *imdb) {
-  char obra[24];
-  int i, alvo = -1, perfil = perfis_ativo();
-  long long agora = prog_agora_ms();
-  prog_content_id(obra, sizeof obra, imdb, NULL, NULL);
-  if (!obra[0]) return;
-  TRANCAR();
-  for (i = 0; i < nRemovidos && alvo < 0; i++)
-    if (removidos[i].perfil == perfil && !strcmp(removidos[i].obra, obra)) alvo = i;
-  if (alvo < 0 && nRemovidos < PROG_REMOVIDOS_MAX) alvo = nRemovidos++;
-  if (alvo < 0) {
-    alvo = 0;
-    for (i = 1; i < nRemovidos; i++) if (removidos[i].ms < removidos[alvo].ms) alvo = i;
+static int newest(const void *a,const void *b) {
+  const ProgRegistro *x=a,*y=b;
+  if(x->lastWatchedMs!=y->lastWatchedMs)return x->lastWatchedMs<y->lastWatchedMs?1:-1;
+  return strcmp(x->chave,y->chave);
+}
+int prog_ler_perfil(int profile,ProgRegistro *out,int max) {
+  int n=0;pthread_mutex_lock(&mu);load();
+  for(int i=0;i<count && n<max;i++)if(rows[i].perfil==profile && !rows[i].removido)out[n++]=rows[i];
+  pthread_mutex_unlock(&mu);qsort(out,n,sizeof *out,newest);return n;
+}
+int prog_ler(ProgRegistro *out,int max) { return prog_ler_perfil(perfis_ativo(),out,max); }
+int prog_por_chave(const char *key,ProgRegistro *out) {
+  if(!key||!*key)return 0;pthread_mutex_lock(&mu);load();int i=find(perfis_ativo(),key);
+  int ok=i>=0 && !rows[i].removido;if(ok && out)*out=rows[i];pthread_mutex_unlock(&mu);return ok;
+}
+static void preserveMetadata(ProgRegistro *dst,const ProgRegistro *old) {
+#define KEEP(field) if(!dst->field[0])snprintf(dst->field,sizeof dst->field,"%s",old->field)
+  KEEP(titulo);KEEP(nomeEpisodio);KEEP(poster);KEEP(backdrop);KEEP(logo);KEEP(videoId);
+#undef KEEP
+}
+int prog_gravar_registro_local(const ProgRegistro *input) {
+  if(!input)return 0;ProgRegistro r=*input;if(r.perfil<1)r.perfil=perfis_ativo();r.removido=0;
+  if(!normalize(&r)||r.posSeg<1 || (r.durSeg>0 && r.durSeg<60))return 0;
+  pthread_mutex_lock(&mu);load();int i=find(r.perfil,r.chave);if(i<0)i=slot();
+  if(i<0){pthread_mutex_unlock(&mu);return 0;}
+  if(rows[i].perfil==r.perfil && !strcmp(rows[i].chave,r.chave)) {
+    preserveMetadata(&r,&rows[i]);r.remotoMs=rows[i].remotoMs;
+    if(r.durSeg<=0)r.durSeg=rows[i].durSeg;
   }
-  removidos[alvo].perfil = perfil;
-  snprintf(removidos[alvo].obra, sizeof removidos[alvo].obra, "%s", obra);
-  removidos[alvo].ms = agora;
-  DESTRANCAR();
+  r.lastWatchedMs=prog_agora_ms();r.revisao=++sequence;r.pendente=1;rows[i]=r;version++;
+  int ok=persist();pthread_mutex_unlock(&mu);return ok;
 }
-
-int prog_removido_vence(const char *imdb, long long instanteMs) {
-  char obra[24];
-  int i, perfil = perfis_ativo();
-  long long ms = 0;
-  prog_content_id(obra, sizeof obra, imdb, NULL, NULL);
-  if (!obra[0]) return 0;
-  TRANCAR();
-  for (i = 0; i < nRemovidos; i++)
-    if (removidos[i].perfil == perfil && !strcmp(removidos[i].obra, obra)) { ms = removidos[i].ms; break; }
-  if (!ms) { DESTRANCAR(); return 0; }
-  // EMPATE FICA COM A REMOCAO: o mesmo milissegundo e o proprio item que foi
-  // tirado, nao uma sessao nova.
-  if (instanteMs > ms) { DESTRANCAR(); return 0; }
-  // ASSISTIU DE NOVO AQUI: o player gravou depois da remocao. O item da
-  // refacao pode vir do Trakt com o paused_at velho (o scrobble ainda nao
-  // chegou la), e sem esta consulta o registro local novo perderia para ele.
-  carregar();
-  for (i = 0; i < nRegs; i++)
-    if (regs[i].perfil == perfil && !strcmp(regs[i].contentId, obra) &&
-        regs[i].lastWatchedMs > ms) { DESTRANCAR(); return 0; }
-  DESTRANCAR();
-  return 1;
+int prog_gravar_local(const char *id,int s,int e,double pos,double dur) {
+  ProgRegistro r={0};r.percentual=-1;snprintf(r.contentId,sizeof r.contentId,"%s",id?id:"");
+  r.temporada=s;r.episodio=e;r.posSeg=pos;r.durSeg=dur;return prog_gravar_registro_local(&r);
 }
-
-void prog_esquecer_tudo(void) {
-  TRANCAR();
-  dados_apagar(ARQ);
-  carregado = 0;
-  nRegs = 0;
-  // Logout: as remocoes eram da conta que saiu.
-  nRemovidos = 0;
-  DESTRANCAR();
+void prog_enriquecer(const ProgRegistro *metadata) {
+  if(!metadata)return;pthread_mutex_lock(&mu);load();int i=find(metadata->perfil>0?metadata->perfil:perfis_ativo(),metadata->chave);
+  if(i>=0 && !rows[i].removido) {
+    ProgRegistro r=*metadata;preserveMetadata(&r,&rows[i]);
+    snprintf(rows[i].titulo,sizeof rows[i].titulo,"%s",r.titulo);snprintf(rows[i].nomeEpisodio,sizeof rows[i].nomeEpisodio,"%s",r.nomeEpisodio);
+    snprintf(rows[i].poster,sizeof rows[i].poster,"%s",r.poster);snprintf(rows[i].backdrop,sizeof rows[i].backdrop,"%s",r.backdrop);snprintf(rows[i].logo,sizeof rows[i].logo,"%s",r.logo);persist();
+  }pthread_mutex_unlock(&mu);
 }
+static int mergeRemote(ProgRegistro r,int profile) {
+  r.perfil=profile;r.pendente=0;r.removido=0;if(!normalize(&r))return 0;
+  int i=find(profile,r.chave);
+  if(i>=0) {
+    if(rows[i].removido && rows[i].lastWatchedMs>=r.lastWatchedMs)return 0;
+    if(rows[i].pendente && rows[i].lastWatchedMs>=r.lastWatchedMs)return 0;
+    if(!rows[i].removido && rows[i].lastWatchedMs>r.lastWatchedMs)return 0;
+    preserveMetadata(&r,&rows[i]);
+    if(rows[i].lastWatchedMs==r.lastWatchedMs && rows[i].posSeg==r.posSeg && rows[i].durSeg==r.durSeg && !rows[i].removido) { rows[i].remotoMs=r.lastWatchedMs;return 0; }
+  } else { i=slot();if(i<0)return 0; }
+  r.remotoMs=r.lastWatchedMs;r.revisao=++sequence;rows[i]=r;version++;return 1;
+}
+int prog_aplicar_remoto(const ProgRegistro *input) {
+  if(!input)return 0;pthread_mutex_lock(&mu);load();int n=mergeRemote(*input,perfis_ativo());if(n)persist();pthread_mutex_unlock(&mu);return n;
+}
+int prog_aplicar_snapshot(int profile,const ProgRegistro *remote,int n) {
+  if(n<=0)return 0; /* Official recovery policy: empty remote is not a deletion. */
+  pthread_mutex_lock(&mu);load();int changed=0;
+  for(int i=count-1;i>=0;i--)if(rows[i].perfil==profile && !rows[i].pendente && !rows[i].removido && rows[i].remotoMs>0) {
+    int present=0;for(int j=0;j<n;j++)if(!strcmp(rows[i].chave,remote[j].chave)){present=1;break;}
+    if(!present){rows[i]=rows[--count];changed++;version++;}
+  }
+  for(int j=0;j<n;j++)changed+=mergeRemote(remote[j],profile);
+  persist();pthread_mutex_unlock(&mu);return changed;
+}
+int prog_pendentes_perfil(int profile,ProgRegistro *out,int max,int deleted) {
+  int n=0;pthread_mutex_lock(&mu);load();for(int i=0;i<count && n<max;i++)
+    if(rows[i].perfil==profile && rows[i].pendente && rows[i].removido==deleted)out[n++]=rows[i];
+  pthread_mutex_unlock(&mu);return n;
+}
+int prog_pendentes(ProgRegistro *out,int max) {return prog_pendentes_perfil(perfis_ativo(),out,max,0);}
+void prog_confirmar(const ProgRegistro *sent,int n) {
+  pthread_mutex_lock(&mu);load();int changed=0;
+  for(int j=0;j<n;j++) {int i=find(sent[j].perfil,sent[j].chave);
+    if(i>=0 && rows[i].revisao==sent[j].revisao && rows[i].removido==sent[j].removido) {
+      rows[i].pendente=0;rows[i].remotoMs=rows[i].lastWatchedMs;changed++;
+    }
+  }if(changed)persist();pthread_mutex_unlock(&mu);
+}
+void prog_remover(const char *key) {
+  if(!key||!*key)return;pthread_mutex_lock(&mu);load();int i=find(perfis_ativo(),key);
+  if(i>=0){rows[i].removido=1;rows[i].pendente=1;rows[i].lastWatchedMs=prog_agora_ms();rows[i].revisao=++sequence;version++;persist();}
+  pthread_mutex_unlock(&mu);
+}
+void prog_marcar_removido(const char *id) {
+  char parent[64];prog_content_id(parent,sizeof parent,id,NULL,NULL);int profile=perfis_ativo();
+  pthread_mutex_lock(&mu);load();int changed=0;
+  for(int i=0;i<count;i++)if(rows[i].perfil==profile && !strcmp(rows[i].contentId,parent)) {
+    rows[i].removido=1;rows[i].pendente=1;rows[i].lastWatchedMs=prog_agora_ms();rows[i].revisao=++sequence;changed++;
+  }
+  if(!changed && parent[0]) {
+    int i=slot();if(i>=0){ProgRegistro r={0};r.perfil=profile;r.percentual=-1;
+      snprintf(r.contentId,sizeof r.contentId,"%s",parent);normalize(&r);r.removido=1;r.pendente=1;
+      r.lastWatchedMs=prog_agora_ms();r.revisao=++sequence;rows[i]=r;changed=1;}
+  }
+  if(changed){version++;persist();}pthread_mutex_unlock(&mu);
+}
+int prog_removido_vence(const char *id,long long time) {
+  char parent[64];prog_content_id(parent,sizeof parent,id,NULL,NULL);int profile=perfis_ativo(),yes=0;
+  pthread_mutex_lock(&mu);load();
+  long long deleted=0,newestLocal=0;
+  for(int i=0;i<count;i++)if(rows[i].perfil==profile && !strcmp(rows[i].contentId,parent)) {
+    if(rows[i].removido && rows[i].lastWatchedMs>deleted)deleted=rows[i].lastWatchedMs;
+    if(!rows[i].removido && rows[i].lastWatchedMs>newestLocal)newestLocal=rows[i].lastWatchedMs;
+  }
+  yes=deleted>0 && deleted>=time && deleted>newestLocal;pthread_mutex_unlock(&mu);return yes;
+}
+void prog_invalidar(void){pthread_mutex_lock(&mu);loaded=0;count=0;version++;pthread_mutex_unlock(&mu);}
+void prog_esquecer_tudo(void){pthread_mutex_lock(&mu);count=0;loaded=1;sequence=0;version++;dados_apagar(STORE);dados_apagar("progresso.txt");pthread_mutex_unlock(&mu);}
+unsigned prog_revisao(void){pthread_mutex_lock(&mu);unsigned v=version;pthread_mutex_unlock(&mu);return v;}

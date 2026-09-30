@@ -226,6 +226,8 @@ const char *video_hdr(void);   // hdrType cru: "none", "HDR10", "DolbyVision"...
 // usada pelos modos de zoom do player.
 int  video_largura(void);
 int  video_altura(void);
+// Taxa do fluxo decodificado quando o player a informou; 0 = desconhecida.
+double video_fps_atual(void);
 
 // --- TELA PRETA COM AUDIO TOCANDO -------------------------------------------
 //

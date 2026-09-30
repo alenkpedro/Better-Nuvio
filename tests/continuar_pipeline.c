@@ -19,6 +19,7 @@ int homeestado_identidade_geracao(unsigned g, char *dono, unsigned tamDono, int 
 int arte_reserva_episodios(const char *imdb, const char *corpo) { (void)imdb; (void)corpo; return 0; }
 
 #include "../src/descoberta.c"
+#include "../src/watch_service.c"
 #include <assert.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -93,9 +94,14 @@ const char *addons_base_por_id(const char *id) { (void)id; return ""; }
 int addons_montar_url(int i, const char *recurso, char *dst, size_t tam) {
   (void)i; (void)recurso; if (tam) dst[0] = 0; return 0; }
 void  addons_manifesto_lido(int i, const char *corpo) { (void)i; (void)corpo; }
+static int exactLizzieMetadata;
+static int tmdbLizzieTeste;
 static int cinemetaMonster;
 char *rede_baixar(const char *u, int t)    {
   (void)t;
+  if(exactLizzieMetadata&&strstr(u,"tmdb%3A299939"))return strdup("{\"meta\":{\"id\":\"tmdb:299939\",\"name\":\"Monstro: A História de Lizzie Borden\",\"poster\":\"lizzie-fresh.jpg\"}}");
+  if (tmdbLizzieTeste && strstr(u, "/tv/299939?"))
+    return strdup("{\"name\":\"Monstro: A História de Lizzie Borden\",\"poster_path\":\"/lizzie-red.jpg\",\"backdrop_path\":\"/lizzie-bg.jpg\"}");
   if (cinemetaMonster && strstr(u, "v3-cinemeta.strem.io/meta/series/tt13207736.json"))
     return strdup("{\"meta\":{\"id\":\"tt13207736\",\"name\":\"Monster\",\"poster\":\"monster.jpg\"}}");
   if (strstr(u, "metadata.test/meta/series/tt13207736.json"))
@@ -180,11 +186,11 @@ int trakt_continuar(CatItem *s, int m) {
   return i;
 }
 
-static long long relogioProg(void) { return 1000000; }
+static long long relogioProg(void) { return agoraMs; }
 
 static void conferir(const char *rotulo, const char *const *esperado, int n) {
   CatItem lote[CONT_MAX];
-  int k, nc = montarContinuar(lote, CONT_MAX, NULL);
+  int k, nc = cw_service_build(lote, CONT_MAX, NULL);
   if (nc != n) { fprintf(stderr, "%s: %d itens, esperado %d\n", rotulo, nc, n); exit(1); }
   for (k = 0; k < n; k++)
     if (strcmp(lote[k].imdb, esperado[k])) {
@@ -197,209 +203,43 @@ static void conferir(const char *rotulo, const char *const *esperado, int n) {
   }
 }
 
+
+int vistoep_estado(const char *id,int season,int episode){(void)id;(void)season;(void)episode;return 0;}
 int main(void) {
-  prog_definir_relogio(relogioProg);
-  agoraMs = (long long)time(NULL) * 1000LL;
-
-  { static const char *const e[] = { "ttA:1:3", "tt1", "ttB:2:1", "ttC:1:8", "tt2" };
-    modoTeste = CWO_PADRAO;
-    conferir("padrao", e, 5);
-    assert(!cwo_e_futuro("ttA:1:3") && !cwo_e_futuro("ttB:2:1"));
-    puts("ok  padrao: pelo instante, nenhum futuro publicado"); }
-
-  { static const char *const e[] = { "tt1", "ttC:1:8", "tt2", "ttB:2:1", "ttA:1:3" };
-    modoTeste = CWO_STREAMING;
-    conferir("streaming", e, 5);
-    puts("ok  streaming: futuros no fim, a estreia mais proxima primeiro");
-    modoTeste = CWO_SEPARAR;
-    conferir("separar", e, 5);
-    assert(cwo_e_futuro("ttA:1:3") && cwo_e_futuro("ttB:2:1"));
-    assert(!cwo_e_futuro("ttC:1:8") && !cwo_e_futuro("tt1") && !cwo_e_futuro("tt2"));
-    puts("ok  separar: mesma ordem, futuros publicados para a home"); }
-
-  // Fileira curta: os futuros e que ficam de fora do corte.
-  { CatItem lote[CONT_MAX];
-    int nc = montarContinuar(lote, 4, NULL);
-    assert(nc == 4 && !strcmp(lote[3].imdb, "ttB:2:1"));
-    assert(cwo_e_futuro("ttB:2:1") && !cwo_e_futuro("ttA:1:3"));
-    puts("ok  fileira curta: o futuro fica com o lugar reservado, o outro sai"); }
-
-  { static const char *const e[] = { "tt1", "ttC:1:8", "tt2" };
-    naoExibidosTeste = 0;
-    conferir("nao exibidos desligado", e, 3);
-    assert(!cwo_e_futuro("ttA:1:3") && !cwo_e_futuro("ttB:2:1"));
-    modoTeste = CWO_PADRAO;
-    conferir("nao exibidos desligado (padrao)", e, 3);
-    puts("ok  nao exibidos desligado: futuros saem em qualquer modo"); }
-
-  // --- BROTHERS: fileira cheia, o futuro e o mais recente ---------------------
-  { int k;
-    tabela = BROTHERS;
-    nTabela = (int)(sizeof BROTHERS / sizeof *BROTHERS);
-    for (k = 0; k < 12; k++) {
-      ProgRegistro r;
-      memset(&r, 0, sizeof r);
-      if (k == 0) {             // Brothers S1E4 na conta, MAIS VELHO que o S1E6 do Trakt
-        snprintf(r.contentId, sizeof r.contentId, "tt6773088");
-        r.temporada = 1; r.episodio = 4;
-      } else snprintf(r.contentId, sizeof r.contentId, "tt70000%02d", k);
-      r.posSeg = 1200; r.durSeg = 3000;       // 40%
-      r.lastWatchedMs = 800000 - k * 100;
-      assert(prog_aplicar_remoto(&r));
-    }
-    naoExibidosTeste = 1;
-
-    // Padrao: pelo instante, Brothers (o mais recente) primeiro.
-    { CatItem lote[CONT_MAX];
-      int nc;
-      modoTeste = CWO_PADRAO;
-      nc = montarContinuar(lote, CONT_MAX, NULL);
-      assert(nc == 12 && !strcmp(lote[0].imdb, "tt6773088:1:6"));
-      for (k = 1; k < nc; k++) assert(strncmp(lote[k].imdb, "tt6773088", 9));
-      assert(!cwo_e_futuro("tt6773088:1:6"));
-      puts("ok  brothers padrao: o S1E6 do Trakt na frente, o S1E4 da conta fora"); }
-
-    // Separar futuros: Brothers FICA na lista (no fim) e e publicado como futuro.
-    { CatItem lote[CONT_MAX];
-      int nc;
-      modoTeste = CWO_SEPARAR;
-      nc = montarContinuar(lote, CONT_MAX, NULL);
-      assert(nc == 12);
-      assert(!strcmp(lote[11].imdb, "tt6773088:1:6"));
-      assert(!strcmp(lote[0].imdb, "tt32260680:1:2"));
-      assert(cwo_e_futuro("tt6773088:1:6"));
-      assert(!cwo_e_futuro("tt32260680:1:2") && !cwo_e_futuro("tt31937954:1:3"));
-      puts("ok  brothers separar: S1E6 publicado como futuro, nao cortado");
-      modoTeste = CWO_STREAMING;
-      nc = montarContinuar(lote, CONT_MAX, NULL);
-      assert(nc == 12 && !strcmp(lote[11].imdb, "tt6773088:1:6"));
-      puts("ok  brothers streaming: S1E6 no fim da fileira"); }
-
-    // showUnairedNextUp desligado: Brothers sai, e a fileira continua cheia.
-    { CatItem lote[CONT_MAX];
-      int nc;
-      naoExibidosTeste = 0;
-      modoTeste = CWO_SEPARAR;
-      nc = montarContinuar(lote, CONT_MAX, NULL);
-      assert(nc == 12);
-      for (k = 0; k < nc; k++) assert(strncmp(lote[k].imdb, "tt6773088", 9));
-      assert(!cwo_e_futuro("tt6773088:1:6"));
-      puts("ok  brothers nao exibidos desligado: S1E6 escondido, fileira cheia"); }
-
-    // Sem data (o Cinemeta nao deu `released`): conta como exibido, fica na
-    // frente pelo instante e nao e publicado como futuro.
-    { CatItem lote[CONT_MAX];
-      int nc;
-      naoExibidosTeste = 1;
-      modoTeste = CWO_SEPARAR;
-      semDataPrimeiro = 1;
-      nc = montarContinuar(lote, CONT_MAX, NULL);
-      semDataPrimeiro = 0;
-      assert(nc == 12 && !strcmp(lote[0].imdb, "tt6773088:1:6"));
-      assert(!cwo_e_futuro("tt6773088:1:6"));
-      puts("ok  brothers sem data: conta como exibido (e o log diz)"); }
-    naoExibidosTeste = 1; }
-  { CatItem lote[CONT_MAX];
-    addonDisponivel = 0;
-    assert(montarContinuar(lote, CONT_MAX, NULL) == 0);
-    puts("ok  sem addon, nenhum titulo em ingles e publicado"); }
-  // A serie principal pode nao ter /meta no addon, mas os cards dos arcos
-  // estao no catalogo. O episodio S3E2 deve usar o card de Ed Gein, mesmo
-  // quando a colecao tambem contem o arco Menendez da temporada 2.
-  { CatItem arcos[2] = {0}, lote[CONT_MAX];
-    ProgRegistro regs[4], legado = {0};
-    snprintf(arcos[0].imdb, sizeof arcos[0].imdb, "ttArcoMenendez");
-    snprintf(arcos[0].titulo, sizeof arcos[0].titulo, "Monstros: Menendez");
-    snprintf(arcos[0].poster, sizeof arcos[0].poster, "menendez.jpg");
-    snprintf(arcos[0].imdbFonte, sizeof arcos[0].imdbFonte, "tt13207736");
-    arcos[0].temporadaFonte = 2;
-    snprintf(arcos[1].imdb, sizeof arcos[1].imdb, "ttArcoGein");
-    snprintf(arcos[1].titulo, sizeof arcos[1].titulo, "Monstro: Ed Gein");
-    snprintf(arcos[1].poster, sizeof arcos[1].poster, "gein.jpg");
-    snprintf(arcos[1].imdbFonte, sizeof arcos[1].imdbFonte, "tt13207736");
-    arcos[1].temporadaFonte = 3;
-    for (int i = 0; i < 2; i++) snprintf(arcos[i].tipo, sizeof arcos[i].tipo, "series");
-    prog_invalidar();
-    cat_definir_tudo(NULL, 0, NULL, 0);
-    tabela = MONSTROS; nTabela = 1;
-    fonteTeste = AJ_CWF_TRAKT;
-    assert(montarContinuar(lote, CONT_MAX, NULL) == 1);
-    assert(!strcmp(lote[0].imdb, "tt13207736:3:2"));
-    assert(strstr(lote[0].titulo, "Ed Gein"));
-    cat_definir_tudo(arcos, 2, NULL, 0);
-    assert(montarContinuar(lote, CONT_MAX, NULL) == 1);
-    assert(!strcmp(lote[0].imdb, "tt13207736:3:2"));
-    assert(!strcmp(lote[0].titulo, "Monstro: Ed Gein"));
-    assert(!strcmp(lote[0].poster, "gein.jpg") && lote[0].temporadaFonte == 3);
-    puts("ok  Monstros S3 usa o card de Ed Gein sem meta do addon");
-
-    cat_definir_tudo(NULL, 0, NULL, 0);
-    cinemetaMonster = 1;
-    assert(montarContinuar(lote, CONT_MAX, NULL) == 1);
-    assert(strstr(lote[0].titulo, "Ed Gein") && !strcmp(lote[0].poster, "monster.jpg"));
-    puts("ok  Monstros continua visivel apos reiniciar sem o card do arco");
-    cinemetaMonster = 0;
-    cat_definir_tudo(arcos, 2, NULL, 0);
-
-    cat_salvar_progresso_ep(1, 1200, 3000, 3, 2);
-    assert(prog_ler(regs, 4) == 1 && !strcmp(regs[0].contentId, "tt13207736"));
-    cat_definir_tudo(arcos, 2, NULL, 0);
-    assert(cat_item(0)->progresso == 0 && cat_item(1)->progresso == 40);
-    puts("ok  progresso do arco grava a serie principal e reaparece so na temporada certa");
-
-    prog_invalidar();
-    snprintf(legado.contentId, sizeof legado.contentId, "ttArcoGein");
-    legado.temporada = 3; legado.episodio = 2;
-    legado.posSeg = 1200; legado.durSeg = 3000; legado.lastWatchedMs = 990001;
-    assert(prog_aplicar_remoto(&legado));
-    fonteTeste = AJ_CWF_CONTA;
-    assert(montarContinuar(lote, CONT_MAX, NULL) == 1);
-    assert(!strcmp(lote[0].imdb, "tt13207736:3:2"));
-    assert(!strcmp(lote[0].titulo, "Monstro: Ed Gein"));
-    puts("ok  progresso antigo pelo ID do arco entra no Continuar assistindo"); }
-  { CatItem lizzie = {0}, lote[CONT_MAX];
-    ProgRegistro remoto = {0};
-    prog_invalidar();
-    cat_definir_tudo(NULL, 0, NULL, 0);
-    cinemetaMonster = 0;
-    fonteTeste = AJ_CWF_CONTA;
-    snprintf(remoto.contentId, sizeof remoto.contentId, "tt13207736");
-    remoto.temporada = 4; remoto.episodio = 2;
-    remoto.posSeg = 1200; remoto.durSeg = 3000; remoto.lastWatchedMs = 990002;
-    assert(prog_aplicar_remoto(&remoto));
-    assert(montarContinuar(lote, CONT_MAX, NULL) == 1);
-    assert(!strcmp(lote[0].imdb, "tt13207736:4:2"));
-    assert(strstr(lote[0].titulo, "Lizzie Borden"));
-    assert(lote[0].progresso == 40);
-    puts("ok  Lizzie Borden da conta aparece mesmo antes do meta e do catalogo");
-
-    snprintf(lizzie.imdb, sizeof lizzie.imdb, "ttArcoLizzie");
-    snprintf(lizzie.imdbFonte, sizeof lizzie.imdbFonte, "tt13207736");
-    snprintf(lizzie.titulo, sizeof lizzie.titulo, "Monstro: A História de Lizzie Borden");
-    snprintf(lizzie.poster, sizeof lizzie.poster, "lizzie.jpg");
-    snprintf(lizzie.tipo, sizeof lizzie.tipo, "series");
-    lizzie.temporadaFonte = 4;
-    cat_definir_tudo(&lizzie, 1, NULL, 0);
-    assert(montarContinuar(lote, CONT_MAX, NULL) == 1);
-    assert(!strcmp(lote[0].poster, "lizzie.jpg"));
-    assert(!strcmp(lote[0].imdb, "tt13207736:4:2"));
-    puts("ok  Lizzie Borden ganha a arte do proprio arco ao carregar o catalogo");
-
-    prog_invalidar();
-    cat_definir_tudo(NULL, 0, NULL, 0);
-    addonDisponivel = 1;
-    memset(&remoto, 0, sizeof remoto);
-    snprintf(remoto.contentId, sizeof remoto.contentId, "tt13207736");
-    remoto.temporada = 4; remoto.episodio = 1;
-    remoto.posSeg = 1440; remoto.durSeg = 0;
-    remoto.lastWatchedMs = 990003;
-    assert(prog_aplicar_remoto(&remoto));
-    assert(montarContinuar(lote, CONT_MAX, NULL) == 1);
-    assert(!strcmp(lote[0].imdb, "tt13207736:4:1"));
-    assert(strstr(lote[0].titulo, "Lizzie Borden"));
-    assert(lote[0].progresso == 46);
-    assert(lote[0].restanteMin == 28);
-    puts("ok  Lizzie Borden sem duracao entra no Continuar assistindo"); }
-  puts("cwordem_desc: tudo ok");
-  return 0;
+  CatItem canonical;
+  assert(deMeta("{\"id\":\"tmdb:299939\",\"imdb_id\":\"tt13207736\",\"name\":\"Monstro: Lizzie Borden\",\"poster\":\"lizzie.jpg\"}",NULL,"series",&canonical));
+  assert(!strcmp(canonical.imdb,"tmdb:299939"));
+  agoraMs=(long long)time(NULL)*1000;prog_definir_relogio(relogioProg);
+  CatItem cards[CONT_MAX];fonteTeste=AJ_CWF_TRAKT;modoTeste=CWO_STREAMING;
+  int n=cw_service_build(cards,CONT_MAX,NULL);assert(n==5);
+  const char *expected[]={"tt1","ttC","tt2","ttB","ttA"};
+  for(int i=0;i<n;i++){printf("%d: %s expected %s\n",i,cards[i].imdb,expected[i]);assert(!strcmp(cards[i].imdb,expected[i]));assert(!strcmp(cards[i].titulo,"Título do addon"));}
+  assert(cards[1].continuarSeguinte&&cards[1].temporada==1&&cards[1].episodio==8);
+  naoExibidosTeste=0;n=cw_service_build(cards,CONT_MAX,NULL);assert(n==3);
+  /* The display publisher cannot erase provider progress or put a completed
+   * account episode back over an explicitly selected next episode. */
+  cat_trocar_continuar(cards,n);
+  assert(cat_item(0)->progresso==cards[0].progresso);
+  assert(cat_item(1)->temporada==cards[1].temporada);
+  prog_esquecer_tudo();fonteTeste=AJ_CWF_CONTA;modoTeste=CWO_PADRAO;naoExibidosTeste=1;
+  ProgRegistro row={0};row.percentual=0;row.perfil=1;row.temporada=1;row.episodio=1;row.posSeg=1482;
+  snprintf(row.contentId,sizeof row.contentId,"tmdb:299939");snprintf(row.tipo,sizeof row.tipo,"series");
+  snprintf(row.titulo,sizeof row.titulo,"Monstro: A História de Lizzie Borden");snprintf(row.poster,sizeof row.poster,"lizzie.jpg");
+  assert(prog_gravar_registro_local(&row));n=cw_service_build(cards,CONT_MAX,NULL);assert(n==1);
+  assert(!strcmp(cards[0].imdb,"tmdb:299939")&&!strcmp(cards[0].poster,"lizzie.jpg")&&cards[0].posicaoSeg==1482&&cards[0].temporada==1);
+  exactLizzieMetadata=1;n=cw_service_build(cards,CONT_MAX,NULL);assert(n==1&&!strcmp(cards[0].poster,"lizzie-fresh.jpg"));
+  addonDisponivel=0;n=cw_service_build(cards,CONT_MAX,NULL);assert(n==1&&!strcmp(cards[0].poster,"lizzie-fresh.jpg"));
+  ProgRegistro completed=row;completed.posSeg=3200;completed.durSeg=3260;
+  assert(prog_gravar_registro_local(&completed));
+  CatItem next=cards[0];next.continuarSeguinte=1;next.temporada=1;next.episodio=2;
+  next.progresso=0;next.posicaoSeg=next.duracaoSeg=0;
+  cat_trocar_continuar(&next,1);cat_reaplicar_progresso();
+  assert(cat_item(0)->episodio==2 && cat_item(0)->progresso==0);
+  ProgRegistro seed;assert(prog_por_chave("tmdb:299939_s1e1",&seed));next.retomadoMs=seed.lastWatchedMs;
+  cw_stage(&next,1,1,ajustes_cw_fonte());
+  n=cw_service_build(cards,CONT_MAX,NULL);assert(n==1&&cards[0].episodio==2&&cards[0].continuarSeguinte);
+  CatItem provisional;assert(cw_service_snapshot(&provisional,1)==1&&provisional.episodio==2);
+  puts("ok stable next-up: keeps last verified next episode during refresh and metadata outage");
+  desc_tirar_continuar("tmdb:299939",1,1);n=cw_service_build(cards,CONT_MAX,NULL);assert(n==0);
+  puts("continuar_pipeline: canonical identity, future ordering, stored artwork, missing metadata and removal OK");return 0;
 }

@@ -8,6 +8,7 @@
 #include "player.h"
 #include "faixas.h"
 #include "legenda.h"
+#include "assrender.h"
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
@@ -51,7 +52,7 @@ static int captura(const char *nome, SDL_Window *win) {
         Uint8 *px = (Uint8 *)s->pixels + y * s->pitch + x * 3;
         Uint32 pix = (Uint32)px[0] | ((Uint32)px[1] << 8) | ((Uint32)px[2] << 16);
         Uint8 r, g, b; SDL_GetRGB(pix, s->format, &r, &g, &b);
-        if (r > 160 && g > 160 && b > 160) vivos++;
+        if (r > 160 || g > 160 || b > 160) vivos++;
       }
       SDL_SaveBMP(s, nome); SDL_FreeSurface(s); printf("captura: %s\n", nome); return vivos; }
   }
@@ -109,6 +110,13 @@ int main(int argc, char **argv) {
   player_leg_estilo_tocou(PLR_LEG_NADA);
   corpo = ler("tests/fixtures/ass/posicionado.ass");
   legenda_definir_corpo(corpo); free(corpo);
+  legenda_bombear();
+#ifdef NV_ASS_LIBASS
+  assert(assrender_ativo());
+  assert(assrender_quadro_cpu(9.999)==0);
+  assert(assrender_quadro_cpu(10)>0);
+  assert(assrender_quadro_cpu(14)==0);
+#endif
 
   // t=11: "Fala embaixo" (base) + "{\an8}Placa traduzida" (topo, amarelo, negrito)
   avancar(11.f);

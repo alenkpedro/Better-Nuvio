@@ -8,14 +8,15 @@ const http = require("http");
 const path = require("path");
 const vm = require("vm");
 const ROOT = path.join(__dirname, "..");
-const PORT = 2732;
-const FETCH_PORT = 2733;
+const PORT = Number(process.env.NUVIO_PLUGIN_PORT) || 2732;
+const FETCH_PORT = Number(process.env.NUVIO_PLUGIN_FETCH_PORT) || 2733;
 const MAX_BODY = 1024 * 1024;
 // A fonte nativa aguarda no maximo 70 s. Um provedor travado nao pode manter
 // os addons normais escondidos atras de uma busca de plugins de dois minutos.
 const FETCH_TIMEOUT = 15000;
 const serviceId = "com.betternuvio.app.plugin";
 const fetchServer = require("../runtime/plugin-http.cjs").createPluginHttpServer({port: FETCH_PORT});
+const embeddedSubtitles = require("../runtime/nuvio/embedded-subtitles.cjs");
 let service;
 try { service = new (require("webos-service"))(serviceId); }
 catch (error) {
@@ -202,7 +203,20 @@ const server = http.createServer(async (req,res) => {
     res.writeHead(200,{"Content-Type":"text/plain"}).end("ok"); return;
   }
   if (req.method === "POST" && req.url === "/clear") {
+    embeddedSubtitles.clearBitmapSubtitleCaches();
     documentCache.clear(); res.writeHead(200).end("ok"); return;
+  }
+  if (req.method === "POST" && req.url === "/subtitles/window") {
+    try {
+      const result = await embeddedSubtitles.getEmbeddedTextSubtitleWindow(await readJson(req));
+      res.writeHead(200,{"Content-Type":"application/json"}).end(JSON.stringify(result));
+    } catch (error) {
+      res.writeHead(502,{"Content-Type":"application/json"}).end(JSON.stringify({
+        errorCode: String(error.code || "SUBTITLE_WINDOW_FAILED"),
+        errorText: String(error.message || error)
+      }));
+    }
+    return;
   }
   if (req.method !== "POST" || req.url !== "/streams") {res.writeHead(404).end();return;}
   try {

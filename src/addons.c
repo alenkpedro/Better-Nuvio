@@ -528,6 +528,41 @@ static void episodioPedido(const char *id, int *temporada, int *episodio) {
   if (p) sscanf(p + 1, "%d:%d", temporada, episodio);
 }
 
+static void nomesLegenda(const char *obj, const char *fim,
+                         char *arquivo, size_t tamArquivo,
+                         char *lancamento, size_t tamLancamento) {
+  static const char *const nomes[] = {
+    "subtitleFileName", "fileName", "filename", "name", "title"
+  };
+  static const char *const releases[] = {
+    "movieReleaseName", "releaseName", "release"
+  };
+  arquivo[0] = lancamento[0] = 0;
+  for (size_t i = 0; i < sizeof nomes / sizeof nomes[0]; i++)
+    if (js_texto(obj, fim, nomes[i], arquivo, tamArquivo)) break;
+  for (size_t i = 0; i < sizeof releases / sizeof releases[0]; i++)
+    if (js_texto(obj, fim, releases[i], lancamento, tamLancamento)) break;
+  if (!arquivo[0]) {
+    char url[600];
+    if (js_texto(obj, fim, "url", url, sizeof url)) {
+      const char *base = strrchr(url, '/');
+      const char *ext;
+      base = base ? base + 1 : url;
+      ext = strrchr(base, '.');
+      if (ext && (!strncasecmp(ext, ".srt", 4) || !strncasecmp(ext, ".ass", 4) ||
+                  !strncasecmp(ext, ".ssa", 4) || !strncasecmp(ext, ".vtt", 4))) {
+        size_t len = strcspn(base, "?#");
+        if (len > 8 && len < tamArquivo) {
+          memcpy(arquivo, base, len);
+          arquivo[len] = 0;
+        }
+      }
+    }
+  }
+  if (!arquivo[0] && lancamento[0])
+    snprintf(arquivo, tamArquivo, "%s", lancamento);
+}
+
 static int episodioCorreto(const char *obj, const char *fim, int temporada, int episodio) {
   int t, e;
   if (temporada <= 0 || episodio <= 0) return 1;
@@ -541,17 +576,18 @@ static int episodioCorreto(const char *obj, const char *fim, int temporada, int 
   // arquivo. Antes aceitavamos S02E03 numa busca por T2E4 e depois fabricavamos
   // o rotulo T2E4 com base no pedido, escondendo o erro. Se o nome traz uma
   // identidade verificavel, ela precisa casar; nome sem marcador segue aceito.
-  { char nome[160] = "", baixo[160]; size_t i;
-    if (!js_texto(obj, fim, "subtitleFileName", nome, sizeof nome))
-      js_texto(obj, fim, "movieReleaseName", nome, sizeof nome);
-    for (i = 0; nome[i] && i + 1 < sizeof baixo; i++)
-      baixo[i] = (char)tolower((unsigned char)nome[i]);
-    baixo[i] = 0;
-    for (i = 0; baixo[i]; i++) {
-      int nt = -1, ne = -1;
-      if (sscanf(baixo + i, "s%2de%2d", &nt, &ne) == 2 ||
-          sscanf(baixo + i, "%2dx%2d", &nt, &ne) == 2)
-        return nt == temporada && ne == episodio;
+  { char nomes[2][256], baixo[256]; size_t i;
+    nomesLegenda(obj, fim, nomes[0], sizeof nomes[0], nomes[1], sizeof nomes[1]);
+    for (int k = 0; k < 2; k++) {
+      for (i = 0; nomes[k][i] && i + 1 < sizeof baixo; i++)
+        baixo[i] = (char)tolower((unsigned char)nomes[k][i]);
+      baixo[i] = 0;
+      for (i = 0; baixo[i]; i++) {
+        int nt = -1, ne = -1;
+        if (sscanf(baixo + i, "s%2de%2d", &nt, &ne) == 2 ||
+            sscanf(baixo + i, "%2dx%2d", &nt, &ne) == 2)
+          if (nt != temporada || ne != episodio) return 0;
+      }
     }
   }
   return 1;
@@ -639,7 +675,7 @@ static void *buscarLegendas(void *u) {
         const char *q = p;
         while (q && contagem[i] < LEG_POR_ADDON) {
           const char *f = js_fim(q);
-          char l[16] = "", nome[120] = "";
+          char l[16] = "";
           Legenda *d = &porAddon[i][contagem[i]];
           int grupo = -1, g;
           js_texto(q, f, "lang", l, sizeof l);
@@ -648,16 +684,20 @@ static void *buscarLegendas(void *u) {
               (gi == grupo || (gi == nGrupos && grupo < 0)) &&
               episodioCorreto(q, f, temporada, episodio) &&
               js_texto(q, f, "url", d->url, sizeof d->url)) {
-            js_texto(q, f, "subtitleFileName", nome, sizeof nome);
-            if (!nome[0]) js_texto(q, f, "movieReleaseName", nome, sizeof nome);
+            nomesLegenda(q, f, d->arquivo, sizeof d->arquivo,
+                         d->lancamento, sizeof d->lancamento);
+            d->fps = js_num(q, f, "fps", 0);
+            if (d->fps <= 0) d->fps = js_num(q, f, "frameRate", 0);
+            if (d->fps <= 0) d->fps = js_num(q, f, "fpsMilli", 0) / 1000.0;
+            if (d->fps < 15 || d->fps > 120) d->fps = 0;
             snprintf(d->idioma, sizeof d->idioma, "%s", l);
             snprintf(d->provedor, sizeof d->provedor, "%s", addon[c.indices[i]].nome);
             if (temporada > 0 && episodio > 0)
               snprintf(d->rotulo, sizeof d->rotulo, i18n("T%dE%d  \xc2\xb7  %s%s%.22s"),
-                       temporada, episodio, i18n(ling_nome(l)), nome[0] ? "  \xc2\xb7  " : "", nome);
+                       temporada, episodio, i18n(ling_nome(l)), d->arquivo[0] ? "  \xc2\xb7  " : "", d->arquivo);
             else
               snprintf(d->rotulo, sizeof d->rotulo, "%s%s%.36s",
-                       i18n(ling_nome(l)), nome[0] ? "  \xc2\xb7  " : "", nome);
+                       i18n(ling_nome(l)), d->arquivo[0] ? "  \xc2\xb7  " : "", d->arquivo);
             contagem[i]++;
           }
           q = js_prox(f);

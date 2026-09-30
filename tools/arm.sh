@@ -152,7 +152,7 @@ rm -f ./*.ipk
 # ajustes.txt sai pelo mesmo motivo, com dano menor: e a preferencia de LAYOUT
 # de quem montou, e ela chegaria como se fosse a de quem instalou.
 ARQ_DE_PESSOA="trakt.txt addons.txt tmdb.txt mdblist.txt ajustes.txt
-               progresso.txt nuvem.txt sessao.txt perfil.txt cliente.txt
+               progresso.txt watch-progress-v3.json nuvem.txt sessao.txt perfil.txt cliente.txt
                listas.txt guia-fav.txt"
 
 # UM POR PERFIL, entao o nome nao e fixo: stalker-p1.txt, stalker-p2.txt...

@@ -1370,6 +1370,7 @@ const char *video_hdr(void)       { return "desconhecido"; }
 
 int  video_largura(void)          { return vidW; }
 int  video_altura(void)           { return vidH; }
+double video_fps_atual(void)     { return 0; }
 
 // SEM EQUIVALENTE NESTE ALVO, e por isso responde 0 em vez de fingir.
 //

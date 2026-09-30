@@ -63,7 +63,11 @@ static void listarLegendas(const AVFormatContext *fmt) {
     snprintf(faixas[n].rotulo, sizeof faixas[n].rotulo,
              "Legenda %d · %.8s", n + 1, faixas[n].idioma);
     faixas[n].numero = (int)i;
-    faixas[n].ordinalMkv = -1;
+    faixas[n].ordinalMkv = fmt->iformat && strstr(fmt->iformat->name,"matroska") ? n : -1;
+    snprintf(faixas[n].codec,sizeof faixas[n].codec,"%s",
+      s->codecpar->codec_id==AV_CODEC_ID_ASS?"S_TEXT/ASS":
+      s->codecpar->codec_id==AV_CODEC_ID_SSA?"S_TEXT/SSA":
+      s->codecpar->codec_id==AV_CODEC_ID_SUBRIP?"S_TEXT/UTF8":"native");
     streams[n++] = (int)i;
   }
   pthread_mutex_lock(&mu);

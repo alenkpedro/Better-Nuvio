@@ -1,676 +1,187 @@
 #include "legenda.h"
-#include "assrender.h"
 #include "rede.h"
+#include "assrender.h"
 #include <pthread.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <stdio.h>
 #include <ctype.h>
+#include <math.h>
 
-static pthread_mutex_t trava = PTHREAD_MUTEX_INITIALIZER;
-static LegendaCue *cues;
-static int nCues, ligada;
-static unsigned geracao;
-// A MAIOR DURACAO DO ARQUIVO, e o motivo dela existir esta em legenda_cues:
-// com os blocos ordenados por INICIO, achar os que estao vivos num instante
-// exige olhar para tras — e sem saber ate onde, "para tras" e o arquivo
-// inteiro, a cada quadro.
-static double maiorDur;
-
-static double tempo(const char *s) {
-  int h=0,m=0; double seg=0;
-  if (sscanf(s,"%d:%d:%lf",&h,&m,&seg)==3) return h*3600.0+m*60.0+seg;
-  if (sscanf(s,"%d:%lf",&m,&seg)==2) return m*60.0+seg;
-  return -1;
-}
-
-static void entidade(char *s) {
-  char *r=s,*w=s;
-  while (*r) {
-    if (*r=='<' ) {
-      if (!strncasecmp(r,"<br",3)) { *w++='\n'; }
-      while (*r && *r!='>') r++;
-      if (*r) r++;
-    } else if (!strncmp(r,"&amp;",5))  { *w++='&'; r+=5; }
-    else if (!strncmp(r,"&lt;",4))   { *w++='<'; r+=4; }
-    else if (!strncmp(r,"&gt;",4))   { *w++='>'; r+=4; }
-    else if (!strncmp(r,"&quot;",6)) { *w++='"'; r+=6; }
-    else if (!strncmp(r,"&#39;",5))  { *w++='\''; r+=5; }
-    else *w++=*r++;
-  }
-  *w=0;
-}
-
-// Teto de blocos. Nao existia, e para SRT nunca fez falta: um filme tem ~1200
-// legendas. Um ASS de anime tem as falas MAIS os letreiros, e ha arquivos de
-// karaoke com uma linha por SILABA — dezenas de milhares de eventos, a
-// sizeof(LegendaCue) cada um. Numa TV com pouca RAM isso e um jeito de morrer
-// por causa de um arquivo de legenda.
-#define LEG_MAX_CUES 8000
-
-// Dobra o vetor quando `n` alcanca a capacidade. NULL quando nao ha mais para
-// onde crescer — o chamador para de ler e fica com o que ja tem, que e melhor
-// do que perder o arquivo inteiro.
-static LegendaCue *crescer(LegendaCue *v, int n, int *cap) {
-  LegendaCue *nv;
-  if (n < *cap) return v;
-  if (*cap >= LEG_MAX_CUES) return NULL;
-  *cap *= 2;
-  if (*cap > LEG_MAX_CUES) *cap = LEG_MAX_CUES;
-  nv = realloc(v, (size_t)*cap * sizeof *v);
-  return nv ? nv : NULL;
-}
-
-// --- SRT / WebVTT ------------------------------------------------------------
-
-int legenda_extrair_srt(const char *corpo, LegendaCue **saida) {
-  char *buf,*p,*linha; int n=0,cap=128;
-  LegendaCue *v;
-  if (saida) *saida=NULL;
-  if (!corpo || !saida) return 0;
-  buf=strdup(corpo); if(!buf)return 0;
-  v=calloc((size_t)cap,sizeof *v); if(!v){free(buf);return 0;}
-  p=buf;
-  if ((unsigned char)p[0]==0xef && (unsigned char)p[1]==0xbb && (unsigned char)p[2]==0xbf) p+=3;
-  while (*p) {
-    char *proxima=strchr(p,'\n');
-    if(proxima)*proxima++=0;
-    { char *q=strchr(p,'\r'); if(q)*q=0; }
-    linha=p; p=proxima?proxima:p+strlen(p);
-    if (!strstr(linha,"-->")) continue;
-    char *seta=strstr(linha,"-->"); *seta=0; seta+=3;
-    while(isspace((unsigned char)*seta))seta++;
-    for(char *q=linha;*q;q++)if(*q==',')*q='.';
-    for(char *q=seta;*q;q++)if(*q==',')*q='.';
-    double ini=tempo(linha),fim=tempo(seta);
-    if(ini<0||fim<=ini)continue;
-    char texto[768]={0}; size_t usado=0;
-    while(*p) {
-      char *nl=strchr(p,'\n'); if(nl)*nl++=0;
-      { char *q=strchr(p,'\r');if(q)*q=0; }
-      if(!*p){p=nl?nl:p;break;}
-      size_t l=strlen(p),resta=sizeof texto-usado-1;
-      if(usado&&resta){texto[usado++]='\n';resta--;}
-      if(l>resta)l=resta;memcpy(texto+usado,p,l);usado+=l;texto[usado]=0;
-      p=nl?nl:p+strlen(p);
-    }
-    entidade(texto); if(!texto[0])continue;
-    { LegendaCue *nv=crescer(v,n,&cap); if(!nv)break; v=nv; }
-    memset(&v[n],0,sizeof v[n]);
-    v[n].inicio=ini; v[n].fim=fim; v[n].cor=-1;
-    v[n].posX=v[n].posY=-1.0f; v[n].ordem=n;
-    snprintf(v[n].texto,sizeof v[n].texto,"%s",texto); n++;
-  }
-  free(buf);
-  if(!n){free(v);return 0;}
-  *saida=v;return n;
-}
-
-// --- ASS / SSA ---------------------------------------------------------------
-//
-// O que um ASS de fansub tem e um SRT nao tem: POSICAO (a fala embaixo, o
-// letreiro traduzido em cima do cartaz), ESTILO por fala (o italico do
-// pensamento), COR por estilo e varios eventos AO MESMO TEMPO. Sao essas
-// quatro coisas que o relato da issue #92 descreve como "pisca" e "some
-// metade das falas": o pipeline da TV ve um formato posicionado e desenha
-// como se fosse texto corrido.
-//
-// O caminho de producao completo esta em assrender.c e usa libass quando
-// NV_ASS_LIBASS foi ligado no alvo (as dependencias estaticas sao preparadas
-// por tools/Dockerfile e tools/build-ass-wasm.sh). Este parser permanece como
-// fallback verificavel para SRT/VTT e para diagnostico quando uma faixa ASS
-// chega incompleta ou o backend nao esta presente. Nesse fallback o subconjunto
-// abaixo e intencionalmente pequeno; ele nao e usado quando libass aceitou o
-// documento original.
-
-#define ASS_MAX_ESTILOS 96
-
-typedef struct {
-  char nome[72];
-  int  an, negrito, italico, cor;
-} AssEstilo;
-
-static char *trim(char *s) {
-  char *f;
-  while (isspace((unsigned char)*s)) s++;
-  f = s + strlen(s);
-  while (f > s && isspace((unsigned char)f[-1])) *--f = 0;
-  return s;
-}
-
-// "&H00FF8000" ou "&HFF8000&" -> 0xRRGGBB. O ASS guarda BGR, e trocar os
-// canais aqui e o que impede um letreiro amarelo de sair azul.
-static int corAss(const char *s, int *rgb) {
-  unsigned long v; char *fim;
-  while (isspace((unsigned char)*s)) s++;
-  if (*s=='&' && (s[1]=='H'||s[1]=='h')) s+=2;
-  else if (*s=='H'||*s=='h') s++;
-  if (!isxdigit((unsigned char)*s)) return 0;
-  v = strtoul(s,&fim,16);
-  if (fim==s) return 0;
-  *rgb = (int)(((v & 0xFFUL)<<16) | (((v>>8) & 0xFFUL)<<8) | ((v>>16) & 0xFFUL));
+#define DOCUMENT_LIMIT (4*1024*1024)
+#define CUE_LIMIT 20000
+/* One immutable document, one owner, the player's media time. A load cannot
+ * publish into another selection. libass remains the ASS renderer. */
+typedef struct { LegendaCue *cue; double *ends; int n,ass; char *body; } Document;
+static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
+static Document *active;
+static unsigned generation=1,rendererGeneration;
+static int state=LEG_OFF,rendererPending;
+static void destroy(Document *d){if(d){free(d->cue);free(d->ends);free(d->body);free(d);}}
+static char *trim(char *s){while(isspace((unsigned char)*s))s++;char *e=s+strlen(s);while(e>s&&isspace((unsigned char)e[-1]))*--e=0;return s;}
+static int emit(char *out,size_t *n,unsigned cp){
+  if(cp<=0x7f)out[(*n)++]=(char)cp;
+  else if(cp<=0x7ff){out[(*n)++]=(char)(0xc0|(cp>>6));out[(*n)++]=(char)(0x80|(cp&63));}
+  else if(cp<=0xffff){out[(*n)++]=(char)(0xe0|(cp>>12));out[(*n)++]=(char)(0x80|((cp>>6)&63));out[(*n)++]=(char)(0x80|(cp&63));}
+  else if(cp<=0x10ffff){out[(*n)++]=(char)(0xf0|(cp>>18));out[(*n)++]=(char)(0x80|((cp>>12)&63));out[(*n)++]=(char)(0x80|((cp>>6)&63));out[(*n)++]=(char)(0x80|(cp&63));}
   return 1;
 }
-
-// Alinhamento do SSA antigo (1..11, com 9/10/11 no meio da tela) para o \an do
-// ASS (1..9). Arquivos "[V4 Styles]" e a tag \a usam a tabela velha, e ler um
-// pelo outro poe a fala do rodape no meio da tela.
-static int anDeLegado(int a) {
-  int col = ((a-1)%4)+1;      /* 1 esq, 2 centro, 3 dir */
-  if (col>3) col=2;
-  if (a>=9)  return 3+col;    /* meio  -> 4,5,6 */
-  if (a>=5)  return 6+col;    /* topo  -> 7,8,9 */
-  return col;                 /* base  -> 1,2,3 */
+static int utf8Valid(const unsigned char *s,size_t n){
+  for(size_t i=0;i<n;){unsigned c=s[i++],cp;int k;
+    if(c<128)continue;if(c>=0xc2&&c<=0xdf){k=1;cp=c&31;}else if(c>=0xe0&&c<=0xef){k=2;cp=c&15;}else if(c>=0xf0&&c<=0xf4){k=3;cp=c&7;}else return 0;
+    if(i+(size_t)k>n)return 0;for(int j=0;j<k;j++){if((s[i]&0xc0)!=0x80)return 0;cp=(cp<<6)|(s[i++]&63);}
+    if(cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff)||(k==2&&cp<0x800)||(k==3&&cp<0x10000))return 0;
+  }return 1;
 }
-
-// Indice da coluna `nome` numa linha "Format: a, b, c". -1 se nao houver.
-static int colunaDe(const char *fmt, const char *nome) {
-  const char *p = strchr(fmt,':');
-  int i = 0;
-  if (!p) return -1;
-  p++;
-  while (*p) {
-    const char *ini = p, *fim;
-    while (*p && *p!=',') p++;
-    fim = p;
-    while (ini<fim && isspace((unsigned char)*ini)) ini++;
-    while (fim>ini && isspace((unsigned char)fim[-1])) fim--;
-    if ((int)strlen(nome)==(int)(fim-ini) && !strncasecmp(ini,nome,(size_t)(fim-ini)))
-      return i;
-    if (*p==',') p++;
-    i++;
+/* Byte-length decoding also handles UTF-16 files containing NUL bytes. */
+char *legenda_decodificar(const void *bytes,size_t len){
+  if(!bytes||!len||len>DOCUMENT_LIMIT)return NULL;
+  const unsigned char *b=bytes;char *out=malloc(len*3+4);if(!out)return NULL;size_t n=0,start=0;
+  int utf16=len>=2&&((b[0]==0xff&&b[1]==0xfe)||(b[0]==0xfe&&b[1]==0xff));
+  if(utf16){int little=b[0]==0xff;for(size_t i=2;i+1<len;i+=2){unsigned c=little?(b[i]|b[i+1]<<8):(b[i]<<8|b[i+1]);
+    if(c>=0xd800&&c<=0xdbff&&i+3<len){unsigned low=little?(b[i+2]|b[i+3]<<8):(b[i+2]<<8|b[i+3]);if(low>=0xdc00&&low<=0xdfff){c=0x10000+((c-0xd800)<<10)+(low-0xdc00);i+=2;}else c=0xfffd;}
+    else if(c>=0xd800&&c<=0xdfff)c=0xfffd;if(c)emit(out,&n,c);
+  }}else{if(len>=3&&b[0]==0xef&&b[1]==0xbb&&b[2]==0xbf)start=3;
+    if(utf8Valid(b+start,len-start)){memcpy(out,b+start,len-start);n=len-start;}
+    else {static const unsigned cp1252[32]={0x20ac,0xfffd,0x201a,0x192,0x201e,0x2026,0x2020,0x2021,0x2c6,0x2030,0x160,0x2039,0x152,0xfffd,0x17d,0xfffd,0xfffd,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0x2dc,0x2122,0x161,0x203a,0x153,0xfffd,0x17e,0x178};
+      for(size_t i=start;i<len;i++){unsigned c=b[i];if(c>=128&&c<160)c=cp1252[c-128];if(c)emit(out,&n,c);}}
   }
-  return -1;
+  size_t j=0;for(size_t i=0;i<n;i++){if(out[i]=='\r'){out[j++]='\n';if(i+1<n&&out[i+1]=='\n')i++;}else out[j++]=out[i];}out[j]=0;return out;
 }
-
-// Ponteiro para o campo `idx` de uma linha "Dialogue: a,b,c,...". O ULTIMO
-// campo (o texto) pode ter virgulas — quase sempre tem —, e por isso esta
-// funcao devolve o resto da linha em vez de recortar.
-static const char *campoAss(const char *linha, int idx) {
-  const char *p = strchr(linha,':');
-  int i;
-  if (!p) return NULL;
-  p++;
-  for (i=0;i<idx;i++) {
-    p = strchr(p,',');
-    if (!p) return NULL;
-    p++;
-  }
-  return p;
+static double timestamp(const char *s){
+  while(isspace((unsigned char)*s))s++;char *e;double parts[3];int n=0;
+  while(n<3){parts[n]=strtod(s,&e);if(e==s||parts[n]<0||!isfinite(parts[n]))return -1;n++;if(*e!=':')break;s=e+1;}
+  double seconds=n==3?parts[0]*3600+parts[1]*60+parts[2]:n==2?parts[0]*60+parts[1]:parts[0];
+  /* strtod stops before SRT's comma fraction. */
+  if(*e==','){double scale=.1;for(e++;isdigit((unsigned char)*e);e++,scale*=.1)seconds+=(*e-'0')*scale;}
+  return n>=2?seconds:-1;
 }
-
-static void copiaCampo(const char *p, char *dst, size_t tam) {
-  size_t n = 0;
-  if (!p) { if (tam) dst[0]=0; return; }
-  while (p[n] && p[n]!=',' && n<tam-1) { dst[n]=p[n]; n++; }
-  dst[n]=0;
+static int compare(const void *a,const void *b){const LegendaCue *x=a,*y=b;return x->inicio<y->inicio?-1:x->inicio>y->inicio?1:x->ordem-y->ordem;}
+static void initCue(LegendaCue *c,int order){memset(c,0,sizeof *c);c->cor=-1;c->posX=c->posY=-1;c->ordem=order;}
+static int append(LegendaCue **v,int *n,int *cap,const LegendaCue *c){
+  if(*n>=CUE_LIMIT)return 0;if(c->inicio<0||c->fim<=c->inicio||!c->texto[0])return 1;
+  if(*n==*cap){int size=*cap?*cap*2:128;if(size>CUE_LIMIT)size=CUE_LIMIT;void *p=realloc(*v,(size_t)size*sizeof **v);if(!p)return 0;*v=p;*cap=size;}(*v)[(*n)++]=*c;return 1;
 }
-
-// Uma sequencia de tags entre chaves. Devolve 1 quando o evento deve ser
-// DESCARTADO (desenho vetorial).
-static int tagsAss(const char *t, size_t n, LegendaCue *c) {
-  size_t i = 0;
-  int descarta = 0;
-  while (i < n) {
-    if (t[i] != '\\') { i++; continue; }
-    i++;
-    if (i >= n) break;
-    // A ORDEM DAS COMPARACOES E A CORRECAO: "an" antes de "a" (senao \an8 le
-    // como alinhamento legado 8), "pos" antes de "p" (senao \pos vira desenho
-    // vetorial e o evento inteiro some), e \c so quando vem colado no &H
-    // (senao \clip casa com a cor).
-    if (!strncasecmp(t+i,"an",2) && i+2<n && isdigit((unsigned char)t[i+2])) {
-      int a = t[i+2]-'0';
-      if (a>=1 && a<=9) c->an = (short)a;
-      i += 3;
-    } else if (!strncasecmp(t+i,"pos(",4)) {
-      float x,y;
-      if (sscanf(t+i+4,"%f,%f",&x,&y)==2) { c->posX=x; c->posY=y; }
-      i += 4;
-    } else if (!strncasecmp(t+i,"move(",5)) {
-      // \move anima de (x1,y1) ate (x2,y2). Sem animacao, o lugar certo de
-      // parar e o INICIO: e onde o fansub quis que a linha aparecesse.
-      float x,y;
-      if (sscanf(t+i+5,"%f,%f",&x,&y)==2) { c->posX=x; c->posY=y; }
-      i += 5;
-    } else if ((t[i]=='a'||t[i]=='A') && i+1<n && isdigit((unsigned char)t[i+1])) {
-      int a = atoi(t+i+1);
-      if (a>=1 && a<=11) c->an = (short)anDeLegado(a);
-      i += 2;
-    } else if ((t[i]=='i'||t[i]=='I') && i+1<n && (t[i+1]=='0'||t[i+1]=='1')) {
-      c->italico = (short)(t[i+1]=='1');
-      i += 2;
-    } else if ((t[i]=='b'||t[i]=='B') && i+1<n && isdigit((unsigned char)t[i+1])) {
-      // \b1 liga, \b0 desliga, \b700 e um peso — qualquer coisa acima de zero
-      // e "mais grosso que o normal", que e tudo o que este renderizador sabe
-      // fazer.
-      c->negrito = (short)(atoi(t+i+1) > 0);
-      i += 2;
-    } else if ((t[i]=='c'||t[i]=='C') && i+1<n && (t[i+1]=='&'||t[i+1]=='H')) {
-      int rgb; if (corAss(t+i+1,&rgb)) c->cor = rgb;
-      i += 2;
-    } else if (t[i]=='1' && i+1<n && (t[i+1]=='c'||t[i+1]=='C')) {
-      int rgb; if (corAss(t+i+2,&rgb)) c->cor = rgb;
-      i += 2;
-    } else if ((t[i]=='p'||t[i]=='P') && i+1<n && isdigit((unsigned char)t[i+1])) {
-      if (atoi(t+i+1) > 0) descarta = 1;
-      i += 2;
-    } else {
-      i++;
-    }
-  }
-  return descarta;
+static void cleanText(const char *s,char *out,size_t cap,int ass){
+  size_t n=0;int drawing=0;
+  for(;*s&&n+1<cap;s++){
+    if(ass&&*s=='{'){const char *e=strchr(s,'}');if(e){const char *p=s;while((p=strstr(p,"\\p"))&&p<e){if(isdigit((unsigned char)p[2]))drawing=atoi(p+2);p+=2;}s=e;continue;}}
+    if(ass&&*s=='\\'&&(s[1]=='N'||s[1]=='n'||s[1]=='h')){out[n++]=s[1]=='h'?' ':'\n';s++;continue;}
+    if(drawing)continue;
+    if(!ass&&*s=='<'){const char *e=strchr(s,'>');if(e){if(!strncasecmp(s,"<br",3))out[n++]='\n';s=e;continue;}}
+    if(!ass&&*s=='&'){static const struct {const char *from,*to;} entities[]={{"&amp;","&"},{"&lt;","<"},{"&gt;",">"},{"&quot;","\""},{"&apos;","'"},{"&#39;","'"},{"&nbsp;"," "}};int found=0;
+      for(unsigned i=0;i<sizeof entities/sizeof *entities;i++){size_t m=strlen(entities[i].from);if(!strncmp(s,entities[i].from,m)){out[n++]=*entities[i].to;s+=m-1;found=1;break;}}if(found)continue;}
+    out[n++]=*s;
+  }out[n]=0;char *t=trim(out);if(t!=out)memmove(out,t,strlen(t)+1);
+  /* Never leave a truncated UTF-8 sequence at the buffer boundary. */
+  while(n&&((unsigned char)out[n-1]&0xc0)==0x80)n--;if(n&&((unsigned char)out[n-1]>=0xc0)&&!utf8Valid((unsigned char*)out,strlen(out)))out[n-1]=0;
 }
-
-// Texto do evento -> texto desenhavel. Tira as tags, aplica as que este
-// renderizador entende e resolve \N (quebra dura), \n e \h.
-static int textoAss(const char *bruto, char *dst, size_t tam, LegendaCue *c) {
-  size_t w = 0;
-  const char *s = bruto;
-  int descarta = 0;
-  while (*s && w < tam-1) {
-    if (*s=='{') {
-      const char *f = strchr(s,'}');
-      size_t n = f ? (size_t)(f-s-1) : strlen(s+1);
-      if (tagsAss(s+1,n,c)) descarta = 1;
-      if (!f) break;
-      s = f+1;
-      continue;
-    }
-    if (*s=='\\' && (s[1]=='N'||s[1]=='n')) {
-      // \N e quebra dura. \n so quebra quando o arquivo pede quebra manual
-      // (WrapStyle 2) e, fora disso, o proprio libass trata como espaco — que
-      // e o que fazemos, porque quebrar onde o fansub nao quis parte a fala
-      // em duas linhas no meio de uma frase.
-      if (s[1]=='N') dst[w++]='\n';
-      else if (w && dst[w-1]!=' ' && dst[w-1]!='\n') dst[w++]=' ';
-      s += 2;
-      continue;
-    }
-    if (*s=='\\' && s[1]=='h') { dst[w++]=' '; s+=2; continue; }
-    dst[w++] = *s++;
-  }
-  dst[w]=0;
-  // Espaco solto nas pontas e comum depois de tirar as tags.
-  { char *t = trim(dst); if (t!=dst) memmove(dst,t,strlen(t)+1); }
-  return !descarta;
+static int parseSrt(char *body,LegendaCue **v){
+  int n=0,cap=0,order=0,inCue=0,skip=0;LegendaCue c;char *cursor=body,*line;
+  while((line=strsep(&cursor,"\n"))){char *t=trim(line);
+    if(!*t){if(inCue&&!append(v,&n,&cap,&c))break;inCue=0;skip=0;continue;}
+    if(!strncmp(t,"NOTE",4)||!strcmp(t,"STYLE")||!strcmp(t,"REGION")){skip=1;continue;}if(skip)continue;
+    char *arrow=strstr(t,"-->");if(arrow){if(inCue&&!append(v,&n,&cap,&c))break;initCue(&c,order++);*arrow=0;c.inicio=timestamp(t);c.fim=timestamp(arrow+3);inCue=1;continue;}
+    if(inCue){char text[768];cleanText(t,text,sizeof text,0);size_t used=strlen(c.texto);if(used&&used+1<sizeof c.texto)c.texto[used++]='\n';snprintf(c.texto+used,sizeof c.texto-used,"%s",text);}
+  }if(inCue)append(v,&n,&cap,&c);return n;
 }
+typedef struct { char name[80]; short alignment,bold,italic; int color; } AssStyle;
+static int bgrColor(const char *s){while(*s=='&'||*s=='H'||*s=='h')s++;unsigned bgr=(unsigned)strtoul(s,NULL,16);return (int)(((bgr&255)<<16)|(bgr&0xff00)|((bgr>>16)&255));}
+static int parseAss(char *body,LegendaCue **v){
+  int n=0,cap=0,order=0,start=1,end=2,text=9,fields=10,events=0;float rx=0,ry=0;
+  AssStyle styles[128];int ns=0,styleSection=0,styleColumns=0;
+  int styleName=0,styleColor=3,styleBold=7,styleItalic=8,styleAlignment=18,eventStyle=3;
+  char *cursor=body,*line;
+  while((line=strsep(&cursor,"\n"))){char *t=trim(line);
+    if(*t=='['){events=!strcasecmp(t,"[Events]");styleSection=!strcasecmp(t,"[V4+ Styles]")||!strcasecmp(t,"[V4 Styles]");continue;}
+    if(styleSection&&!strncasecmp(t,"Format:",7)){char *p=t+7,*f;styleColumns=0;
+      while((f=strsep(&p,","))&&styleColumns<32){f=trim(f);if(!strcasecmp(f,"Name"))styleName=styleColumns;else if(!strcasecmp(f,"PrimaryColour"))styleColor=styleColumns;else if(!strcasecmp(f,"Bold"))styleBold=styleColumns;else if(!strcasecmp(f,"Italic"))styleItalic=styleColumns;else if(!strcasecmp(f,"Alignment"))styleAlignment=styleColumns;styleColumns++;}continue;}
+    if(styleSection&&!strncasecmp(t,"Style:",6)&&ns<128){char *p=t+6,*part[32];int k=0;
+      while(p&&k<32){part[k++]=trim(strsep(&p,","));}
+      if(styleName<k&&styleColor<k&&styleAlignment<k){AssStyle *style=&styles[ns++];memset(style,0,sizeof *style);snprintf(style->name,sizeof style->name,"%s",part[styleName]);style->color=bgrColor(part[styleColor]);style->alignment=(short)atoi(part[styleAlignment]);style->bold=styleBold<k&&atoi(part[styleBold])!=0;style->italic=styleItalic<k&&atoi(part[styleItalic])!=0;}continue;}
 
-int legenda_eh_ass(const char *corpo) {
-  const char *p;
-  if (!corpo) return 0;
-  if ((unsigned char)corpo[0]==0xef && (unsigned char)corpo[1]==0xbb &&
-      (unsigned char)corpo[2]==0xbf) corpo += 3;
-  // Cabecalho OU eventos: ha arquivo servido sem [Script Info] e ha arquivo
-  // com a secao e sem nenhum Dialogue. Qualquer um dos dois ja descarta o
-  // caminho do SRT, que exige "-->" na linha de tempo.
-  p = corpo;
-  while (*p) {
-    const char *q = p;
-    while (*q && *q != '\n' && isspace((unsigned char)*q)) q++;
-    if (!strncasecmp(q, "[Script Info]", 13) ||
-        !strncasecmp(q, "[Events]", 8) ||
-        !strncasecmp(q, "[V4+ Styles]", 13) ||
-        !strncasecmp(q, "[V4 Styles]", 12)) return 1;
-    // Alguns servidores entregam um ASS/SSA reduzido, sem seções. A detecção
-    // precisa acompanhar o parser (case-insensitive e aceitando recuo), senão
-    // `dialogue:` cai no caminho SRT e desaparece sem diagnóstico.
-    if (!strncasecmp(q, "Dialogue:", 9)) return 1;
-    p = strchr(p, '\n');
-    if (!p) break;
-    p++;
-  }
-  return 0;
+    if(!strncasecmp(t,"PlayResX:",9))rx=(float)atof(t+9);if(!strncasecmp(t,"PlayResY:",9))ry=(float)atof(t+9);
+    if(events&&!strncasecmp(t,"Format:",7)){char *p=t+7,*f;fields=0;while((f=strsep(&p,","))&&fields<32){f=trim(f);if(!strcasecmp(f,"Start"))start=fields;if(!strcasecmp(f,"End"))end=fields;if(!strcasecmp(f,"Text"))text=fields;if(!strcasecmp(f,"Style"))eventStyle=fields;fields++;}continue;}
+    if(strncasecmp(t,"Dialogue:",9))continue;
+    char *part[32]={0},*p=t+9;int got=0;while(got<fields&&got<32){part[got++]=p;if(got==fields)break;char *comma=strchr(p,',');if(!comma)break;*comma=0;p=comma+1;}
+    if(start>=got||end>=got||text>=got)continue;LegendaCue c;initCue(&c,order++);c.inicio=timestamp(part[start]);c.fim=timestamp(part[end]);c.resX=rx;c.resY=ry;
+    if(eventStyle<got)for(int i=0;i<ns;i++)if(!strcmp(styles[i].name,trim(part[eventStyle]))){c.an=styles[i].alignment;c.cor=styles[i].color;c.negrito=styles[i].bold;c.italico=styles[i].italic;break;}
+    const char *over=part[text],*tag;
+    if((tag=strstr(over,"\\an")))c.an=(short)atoi(tag+3);
+    else if((tag=strstr(over,"\\a"))&&isdigit((unsigned char)tag[2])){int a=atoi(tag+2);c.an=(short)(a>=9?a-5:a>=5?a+2:a);}
+    if((tag=strstr(over,"\\pos(")))sscanf(tag+5,"%f,%f",&c.posX,&c.posY);
+    if((tag=strstr(over,"\\b"))&&isdigit((unsigned char)tag[2]))c.negrito=(short)(atoi(tag+2)!=0);
+    if((tag=strstr(over,"\\i"))&&isdigit((unsigned char)tag[2]))c.italico=(short)(atoi(tag+2)!=0);
+    if((tag=strstr(over,"\\c&H"))||(tag=strstr(over,"\\1c&H"))){const char *h=strstr(tag,"&H");unsigned bgr=(unsigned)strtoul(h+2,NULL,16);c.cor=(int)(((bgr&255)<<16)|(bgr&0xff00)|((bgr>>16)&255));}
+    cleanText(over,c.texto,sizeof c.texto,1);if(!append(v,&n,&cap,&c))break;
+  }return n;
 }
-
-static int cmpCue(const void *a, const void *b) {
-  const LegendaCue *x=a,*y=b;
-  if (x->inicio < y->inicio) return -1;
-  if (x->inicio > y->inicio) return 1;
-  return x->ordem - y->ordem;
+int legenda_eh_ass(const char *body){
+  if(!body)return 0;
+  for(const char *line=body;*line;){while(*line==' '||*line=='\t')line++;
+    if(!strncasecmp(line,"[Events]",8)||!strncasecmp(line,"[Script Info]",13)||!strncasecmp(line,"Dialogue:",9))return 1;
+    const char *end=strchr(line,'\n');if(!end)break;line=end+1;
+  }return 0;
 }
-
-int legenda_extrair_ass(const char *corpo, LegendaCue **saida) {
-  char *buf,*p;
-  LegendaCue *v;
-  AssEstilo est[ASS_MAX_ESTILOS];
-  int nEst=0, n=0, cap=128;
-  int secao=0;            /* 1 info, 2 estilos, 3 eventos */
-  int legado=0;           /* [V4 Styles] usa o alinhamento antigo */
-  float resX=0, resY=0;
-  int cNome=0,cCor=1,cNeg=2,cIta=3,cAlin=4;   /* colunas de Style: */
-  int temFmtEstilo=0;
-  int cIni=1,cFim=2,cEstilo=3,cTexto=9;       /* colunas de Dialogue: */
-
-  if (saida) *saida=NULL;
-  if (!corpo || !saida) return 0;
-  buf=strdup(corpo); if(!buf) return 0;
-  v=calloc((size_t)cap,sizeof *v); if(!v){free(buf);return 0;}
-  p=buf;
-  if ((unsigned char)p[0]==0xef && (unsigned char)p[1]==0xbb && (unsigned char)p[2]==0xbf) p+=3;
-
-  while (*p) {
-    char *prox=strchr(p,'\n'), *linha;
-    if (prox) *prox++=0;
-    { char *q=strchr(p,'\r'); if(q)*q=0; }
-    linha=trim(p);
-    p = prox ? prox : p+strlen(p);
-    if (!*linha) continue;
-
-    if (linha[0]=='[') {
-      if (!strncasecmp(linha,"[Script Info]",13)) secao=1;
-      else if (!strncasecmp(linha,"[V4+ Styles]",13) ||
-               !strncasecmp(linha,"[V4 Styles]",12)) {
-        secao=2; legado = !strchr(linha,'+');
-      }
-      else if (!strncasecmp(linha,"[Events]",8)) secao=3;
-      else secao=0;
-      continue;
-    }
-    if (secao==1) {
-      if (!strncasecmp(linha,"PlayResX:",9)) resX=(float)atof(linha+9);
-      else if (!strncasecmp(linha,"PlayResY:",9)) resY=(float)atof(linha+9);
-      continue;
-    }
-    if (secao==2) {
-      if (!strncasecmp(linha,"Format:",7)) {
-        // As colunas de Style: NAO sao fixas — o SSA v4 tem TertiaryColour
-        // onde o ASS v4+ tem OutlineColour, e ler por posicao fixa troca a cor
-        // da fala pela cor do contorno em metade dos arquivos.
-        int k;
-        temFmtEstilo=1;
-        k=colunaDe(linha,"Name");          if(k>=0) cNome=k;
-        k=colunaDe(linha,"PrimaryColour"); if(k>=0) cCor=k;
-        k=colunaDe(linha,"Bold");          if(k>=0) cNeg=k;
-        k=colunaDe(linha,"Italic");        if(k>=0) cIta=k;
-        k=colunaDe(linha,"Alignment");     if(k>=0) cAlin=k;
-        continue;
-      }
-      if (!strncasecmp(linha,"Style:",6) && nEst<ASS_MAX_ESTILOS && temFmtEstilo) {
-        AssEstilo *e=&est[nEst];
-        char tmp[96];
-        memset(e,0,sizeof *e);
-        e->cor=-1;
-        copiaCampo(campoAss(linha,cNome),e->nome,sizeof e->nome);
-        { char *t=trim(e->nome); if(t!=e->nome) memmove(e->nome,t,strlen(t)+1); }
-        copiaCampo(campoAss(linha,cCor),tmp,sizeof tmp);
-        corAss(tmp,&e->cor);
-        copiaCampo(campoAss(linha,cNeg),tmp,sizeof tmp); e->negrito = atoi(trim(tmp))!=0;
-        copiaCampo(campoAss(linha,cIta),tmp,sizeof tmp); e->italico = atoi(trim(tmp))!=0;
-        copiaCampo(campoAss(linha,cAlin),tmp,sizeof tmp);
-        { int a=atoi(trim(tmp));
-          if (a>=1 && a<=11) e->an = legado ? anDeLegado(a) : (a<=9?a:0); }
-        if (e->nome[0]) nEst++;
-        continue;
-      }
-      continue;
-    }
-    // Ha SSA reduzido sem secoes nem Format: em addons antigos. Quando a
-    // linha ja se identifica como Dialogue, os indices padrao acima bastam;
-    // em qualquer outro lugar preservamos a separacao normal das secoes.
-    if (secao!=3 && strncasecmp(linha,"Dialogue:",9)) continue;
-
-    if (!strncasecmp(linha,"Format:",7)) {
-      int k;
-      k=colunaDe(linha,"Start"); if(k>=0) cIni=k;
-      k=colunaDe(linha,"End");   if(k>=0) cFim=k;
-      k=colunaDe(linha,"Style"); if(k>=0) cEstilo=k;
-      k=colunaDe(linha,"Text");  if(k>=0) cTexto=k;
-      continue;
-    }
-    // "Comment:" e a linha que o fansub DESLIGOU. Desenha-la e mostrar o
-    // rascunho de quem traduziu.
-    if (strncasecmp(linha,"Dialogue:",9)) continue;
-    {
-      char ini[64],fim[64],nomeEst[72],texto[768];
-      LegendaCue c;
-      const char *pt;
-      double a,b;
-      copiaCampo(campoAss(linha,cIni),ini,sizeof ini);
-      copiaCampo(campoAss(linha,cFim),fim,sizeof fim);
-      copiaCampo(campoAss(linha,cEstilo),nomeEst,sizeof nomeEst);
-      pt = campoAss(linha,cTexto);
-      if (!pt) continue;
-      a=tempo(trim(ini)); b=tempo(trim(fim));
-      if (a<0 || b<=a) continue;
-
-      memset(&c,0,sizeof c);
-      c.cor=-1; c.posX=c.posY=-1.0f;
-      { char *nm=trim(nomeEst); int i;
-        for (i=0;i<nEst;i++)
-          if (!strcasecmp(est[i].nome,nm)) {
-            c.an=(short)est[i].an; c.negrito=(short)est[i].negrito;
-            c.italico=(short)est[i].italico; c.cor=est[i].cor;
-            break;
-          } }
-      // As tags da PROPRIA LINHA vem depois do estilo e mandam nele: e assim
-      // que um {\i1} num dialogo normal vira pensamento.
-      if (!textoAss(pt,texto,sizeof texto,&c)) continue;
-      if (!texto[0]) continue;
-      c.inicio=a; c.fim=b; c.resX=resX; c.resY=resY; c.ordem=n;
-      snprintf(c.texto,sizeof c.texto,"%s",texto);
-      { LegendaCue *nv=crescer(v,n,&cap); if(!nv) break; v=nv; }
-      v[n++]=c;
-    }
-  }
-  free(buf);
-  if (!n) { free(v); return 0; }
-  // ORDENA POR TEMPO. O arquivo costuma vir em ordem, mas "costuma" nao serve
-  // de invariante para a busca binaria de legenda_cues — e ASS com letreiros
-  // inseridos depois da traducao sai fora de ordem com frequencia.
-  qsort(v,(size_t)n,sizeof *v,cmpCue);
-  *saida=v; return n;
+static int extract(const char *body,LegendaCue **out,int ass){
+  *out=NULL;if(!body)return 0;size_t n=strnlen(body,DOCUMENT_LIMIT+1);if(n>DOCUMENT_LIMIT)return 0;char *copy=legenda_decodificar(body,n);if(!copy)return 0;
+  int count=ass?parseAss(copy,out):parseSrt(copy,out);free(copy);if(count>1)qsort(*out,count,sizeof **out,compare);return count;
 }
-
-int legenda_extrair(const char *corpo, LegendaCue **saida) {
-  if (legenda_eh_ass(corpo)) return legenda_extrair_ass(corpo,saida);
-  return legenda_extrair_srt(corpo,saida);
+int legenda_extrair_srt(const char *body,LegendaCue **out){return extract(body,out,0);}
+int legenda_extrair_ass(const char *body,LegendaCue **out){return extract(body,out,1);}
+int legenda_extrair(const char *body,LegendaCue **out){return extract(body,out,legenda_eh_ass(body));}
+static Document *document(char *utf8){
+  if(!utf8)return NULL;Document *d=calloc(1,sizeof *d);if(!d){free(utf8);return NULL;}d->body=utf8;d->ass=legenda_eh_ass(utf8);d->n=legenda_extrair(utf8,&d->cue);
+  if(d->n){d->ends=malloc((size_t)d->n*sizeof *d->ends);if(!d->ends){destroy(d);return NULL;}double end=0;for(int i=0;i<d->n;i++){if(d->cue[i].fim>end)end=d->cue[i].fim;d->ends[i]=end;}}
+  return d;
 }
-
-typedef struct { char url[1400]; unsigned g; } Pedido;
-static void *baixar(void *u) {
-  Pedido *p=u; char *corpo=rede_baixar(p->url,20); LegendaCue *v=NULL;
-  int ass=corpo?legenda_eh_ass(corpo):0;
-  int n=corpo?legenda_extrair(corpo,&v):0;
-  double dur=0;
-  int aceitarAss=0;
-  int i;
-  for(i=0;i<n;i++){ double d=v[i].fim-v[i].inicio; if(d>dur)dur=d; }
-  pthread_mutex_lock(&trava);
-  if(p->g==geracao&&ligada){
-    free(cues);cues=v;nCues=n;maiorDur=dur;v=NULL;
-    aceitarAss=ass;
-    assrender_geracao(geracao);
-  }
-  pthread_mutex_unlock(&trava);
-  /* O parser legado continua preenchendo cues para SRT/VTT e para o
-   * diagnostico. Quando o documento ASS chegou inteiro, libass recebe o
-   * corpo original, sem passar pelo limite de 768 bytes de uma cue. */
-  if (aceitarAss) {
-    assrender_carregar(corpo, strlen(corpo), p->g);
-    fprintf(stderr, "[legenda] %s\n", assrender_diagnostico());
-  } else if (ass && p->g == geracao) {
-    // So o dono atual limpa: um download ATRASADO de outra faixa (a pessoa ja
-    // trocou) apagava o libass da faixa nova.
-    assrender_limpar();
-  }
-  free(corpo);
-  free(v);
-  printf("[legenda] %s: %d blocos%s\n",ass?"ASS/SSA":"SubRip",n,n?"":" (falha)");
-  fflush(stdout);
-  free(p);return NULL;
+static unsigned publish(Document *d,unsigned owner,int newOwner){
+  pthread_mutex_lock(&lock);if(owner!=generation||(!newOwner&&state==LEG_OFF)){pthread_mutex_unlock(&lock);destroy(d);return 0;}
+  if(newOwner)generation++;Document *old=active;active=d;state=d&&(d->n||d->ass)?LEG_READY:LEG_ERROR;rendererPending=1;unsigned result=generation;
+  pthread_mutex_unlock(&lock);destroy(old);return result;
 }
-
-void legenda_carregar(const char *url) {
-  Pedido *p; pthread_t fio;
-  if(!url||!*url)return;
-  p=calloc(1,sizeof *p);if(!p)return;
-  pthread_mutex_lock(&trava);
-  ligada=1;p->g=++geracao;free(cues);cues=NULL;nCues=0;maiorDur=0;
-  pthread_mutex_unlock(&trava);
-  assrender_geracao(p->g);
-  assrender_limpar_fontes();
-  snprintf(p->url,sizeof p->url,"%s",url);
-  if(pthread_create(&fio,NULL,baixar,p)==0)pthread_detach(fio);else free(p);
+unsigned legenda_geracao(void){pthread_mutex_lock(&lock);unsigned g=generation;pthread_mutex_unlock(&lock);return g;}
+int legenda_estado(void){pthread_mutex_lock(&lock);int s=state;pthread_mutex_unlock(&lock);return s;}
+int legenda_ligada_em(unsigned g){pthread_mutex_lock(&lock);int yes=g==generation&&state!=LEG_OFF;pthread_mutex_unlock(&lock);return yes;}
+void legenda_desligar(void){pthread_mutex_lock(&lock);generation++;Document *old=active;active=NULL;state=LEG_OFF;rendererPending=1;pthread_mutex_unlock(&lock);destroy(old);assrender_geracao(legenda_geracao());}
+static unsigned begin(void){legenda_desligar();pthread_mutex_lock(&lock);state=LEG_LOADING;unsigned g=generation;pthread_mutex_unlock(&lock);return g;}
+unsigned legenda_definir_corpo_se(const char *body,unsigned owner){Document *d=document(body?legenda_decodificar(body,strlen(body)):NULL);return publish(d,owner,1);}
+int legenda_atualizar_corpo_se(const char *body,unsigned owner){Document *d=document(body?legenda_decodificar(body,strlen(body)):NULL);return publish(d,owner,0)!=0;}
+int legenda_instalar_janela(const char *body,unsigned owner){
+  Document *d=document(body?legenda_decodificar(body,strlen(body)):NULL);
+  if(!d)return 0;
+  pthread_mutex_lock(&lock);
+  if(owner!=generation){pthread_mutex_unlock(&lock);destroy(d);return 0;}
+  Document *old=active;active=d;state=LEG_READY;rendererPending=1;
+  pthread_mutex_unlock(&lock);destroy(old);return 1;
 }
-
-// O MESMO caminho de baixar(), sem rede: o corpo ja esta na mao. Serve ao
-// teste de captura (tests/legenda_ass_shot.c) e a quem um dia entregar cues
-// vindos de dentro do MKV (#92, fase 3).
-static unsigned definirCorpo(const char *corpo, int checar, unsigned dono) {
-  LegendaCue *v=NULL; int n, i; double dur=0; int ass; unsigned g;
-  if(!corpo)return 0;
-  ass=legenda_eh_ass(corpo);
-  n=legenda_extrair(corpo,&v);
-  for(i=0;i<n;i++){ double d=v[i].fim-v[i].inicio; if(d>dur)dur=d; }
-  pthread_mutex_lock(&trava);
-  if(checar && geracao!=dono){ pthread_mutex_unlock(&trava); free(v); return 0; }
-  ligada=1;geracao++;g=geracao;free(cues);cues=v;nCues=n;maiorDur=dur;
-  pthread_mutex_unlock(&trava);
-  assrender_geracao(g);
-  assrender_limpar();
-  if (ass) {
-    assrender_carregar(corpo, strlen(corpo), g);
-    fprintf(stderr, "[legenda] %s\n", assrender_diagnostico());
-  }
-  return g;
+void legenda_definir_corpo(const char *body){unsigned g=begin();legenda_definir_corpo_se(body,g);}
+void legenda_atualizar_corpo(const char *body){unsigned g=legenda_geracao();legenda_atualizar_corpo_se(body,g);}
+/* Rendering installation is confined to the player thread. */
+void legenda_bombear(void){
+  pthread_mutex_lock(&lock);if(!rendererPending){pthread_mutex_unlock(&lock);return;}rendererPending=0;unsigned g=generation;
+  if(rendererGeneration!=g)assrender_geracao(g);
+  if(active&&active->ass){if(rendererGeneration==g)assrender_atualizar(active->body,strlen(active->body),g);else assrender_carregar(active->body,strlen(active->body),g);}
+  else assrender_limpar();rendererGeneration=g;pthread_mutex_unlock(&lock);
 }
-
-void legenda_definir_corpo(const char *corpo) { definirCorpo(corpo, 0, 0); }
-
-unsigned legenda_definir_corpo_se(const char *corpo, unsigned dono) {
-  return definirCorpo(corpo, 1, dono);
+typedef struct{unsigned owner;char url[4096];} Request;
+static void *download(void *p){Request *r=p;RedeControle ctl={.max_bytes=DOCUMENT_LIMIT};long n=0;RedeMedida measure;
+  char *bytes=rede_baixar_bin_medido_controle(r->url,15,NULL,&ctl,&n,&measure);char *utf8=bytes?legenda_decodificar(bytes,(size_t)n):NULL;free(bytes);
+  Document *d=document(utf8);publish(d,r->owner,0);free(r);return NULL;
 }
-
-unsigned legenda_geracao(void) {
-  unsigned g;
-  pthread_mutex_lock(&trava); g=geracao; pthread_mutex_unlock(&trava);
-  return g;
+void legenda_carregar(const char *url){unsigned g=begin();Request *r=calloc(1,sizeof *r);if(!r||!url||!*url){free(r);publish(NULL,g,0);return;}r->owner=g;snprintf(r->url,sizeof r->url,"%s",url);pthread_t t;if(pthread_create(&t,NULL,download,r)){free(r);publish(NULL,g,0);}else pthread_detach(t);}
+static int upper(double t){int lo=0,hi=active?active->n:0;while(lo<hi){int m=lo+(hi-lo)/2;if(active->cue[m].inicio<=t)lo=m+1;else hi=m;}return lo;}
+int legenda_cues(double pos,int delay,LegendaCue *out,int max){
+  if(!out||max<=0||!isfinite(pos))return 0;double t=pos-delay/1000.0;int n=0;
+  pthread_mutex_lock(&lock);if(active&&state==LEG_READY){int end=upper(t),lo=0,hi=end;while(lo<hi){int m=lo+(hi-lo)/2;if(active->ends[m]<=t)lo=m+1;else hi=m;}
+    for(int i=lo;i<end;i++)if(active->cue[i].fim>t){LegendaCue c=active->cue[i];int at=n;if(at>=max)at=max-1;while(at>0&&out[at-1].ordem>c.ordem){if(at<max)out[at]=out[at-1];at--;}if(n<max||at<max-1){out[at]=c;if(n<max)n++;}}
+  }pthread_mutex_unlock(&lock);return n;
 }
-
-int legenda_ligada_em(unsigned dono) {
-  int ok;
-  pthread_mutex_lock(&trava); ok=ligada&&geracao==dono; pthread_mutex_unlock(&trava);
-  return ok;
-}
-
-/* Lote seguinte da faixa `dono`. Diferente de legenda_atualizar_corpo, NUNCA
- * cai no caminho cheio: legenda desligada ou de outro dono e resposta de uma
- * faixa que ja saiu, e descarta. */
-int legenda_atualizar_corpo_se(const char *corpo, unsigned dono) {
-  LegendaCue *v=NULL; int n, i; double dur=0; int ass;
-  if(!corpo||!legenda_ligada_em(dono))return 0;
-  ass=legenda_eh_ass(corpo);
-  n=legenda_extrair(corpo,&v);
-  for(i=0;i<n;i++){ double d=v[i].fim-v[i].inicio; if(d>dur)dur=d; }
-  pthread_mutex_lock(&trava);
-  if(!ligada||geracao!=dono){ pthread_mutex_unlock(&trava); free(v); return 0; }
-  free(cues);cues=v;nCues=n;maiorDur=dur;
-  pthread_mutex_unlock(&trava);
-  if (ass) assrender_atualizar(corpo, strlen(corpo), dono);
-  return 1;
-}
-
-/* Lote seguinte da MESMA faixa (#92): troca os cues e o documento do libass
- * sem mudar a geracao. legenda_definir_corpo a cada lote apagava o quadro em
- * tela, desligava o libass por alguns quadros (o overlay antigo desenhava a
- * fala com outra fonte nesse intervalo) e reenviava as fontes: um pisca por
- * lote. Desligada (primeiro lote, ou apos uma troca), cai no caminho cheio. */
-void legenda_atualizar_corpo(const char *corpo) {
-  LegendaCue *v=NULL; int n, i; double dur=0; int ass, ok; unsigned g=0;
-  if(!corpo)return;
-  ass=legenda_eh_ass(corpo);
-  n=legenda_extrair(corpo,&v);
-  for(i=0;i<n;i++){ double d=v[i].fim-v[i].inicio; if(d>dur)dur=d; }
-  pthread_mutex_lock(&trava);
-  ok=ligada;
-  if(ok){ g=geracao; free(cues);cues=v;nCues=n;maiorDur=dur; v=NULL; }
-  pthread_mutex_unlock(&trava);
-  if(!ok){ free(v); legenda_definir_corpo(corpo); return; }
-  if (ass) assrender_atualizar(corpo, strlen(corpo), g);
-}
-
-void legenda_desligar(void) {
-  pthread_mutex_lock(&trava);
-  ligada=0;geracao++;free(cues);cues=NULL;nCues=0;maiorDur=0;
-  pthread_mutex_unlock(&trava);
-  assrender_geracao(geracao);
-  assrender_limpar_fontes();
-}
-
-// Primeiro bloco cujo INICIO passa de `t`. Com o vetor ordenado, tudo o que
-// pode estar vivo em `t` esta ANTES daqui.
-static int primeiroDepois(double t) {
-  int lo=0,hi=nCues;
-  while(lo<hi){int m=(lo+hi)/2; if(cues[m].inicio<=t) lo=m+1; else hi=m;}
-  return lo;
-}
-
-int legenda_falas(double posSeg, int deslocamento, LegendaCue *dst, int max,
-                  int *foco, int *inicio, int *total) {
-  int k, alvo, primeiro, n;
-  long escolhido;
-  if (foco) *foco = -1;
-  if (inicio) *inicio = 0;
-  if (total) *total = 0;
-  if (!dst || max <= 0) return 0;
-  pthread_mutex_lock(&trava);
-  if (!ligada || !cues || nCues <= 0) {
-    pthread_mutex_unlock(&trava);
-    return 0;
-  }
-  k = primeiroDepois(posSeg);
-  // Escolhe a fala realmente mais proxima, inclusive nas pontas da faixa.
-  alvo = k;
-  if (alvo >= nCues) alvo = nCues - 1;
-  else if (alvo > 0 && posSeg - cues[alvo-1].inicio <= cues[alvo].inicio - posSeg)
-    alvo--;
-  escolhido = (long)alvo + deslocamento;
-  if (escolhido < 0) escolhido = 0;
-  if (escolhido >= nCues) escolhido = nCues - 1;
-  alvo = (int)escolhido;
-  primeiro = alvo - max / 2;
-  if (primeiro < 0) primeiro = 0;
-  if (primeiro + max > nCues) primeiro = nCues > max ? nCues - max : 0;
-  n = nCues - primeiro;
-  if (n > max) n = max;
-  memcpy(dst, cues + primeiro, (size_t)n * sizeof *dst);
-  if (foco) *foco = alvo - primeiro;
-  if (inicio) *inicio = primeiro;
-  if (total) *total = nCues;
-  pthread_mutex_unlock(&trava);
-  return n;
-}
-
-int legenda_cues(double posSeg, int atrasoMs, LegendaCue *dst, int max) {
-  double t = posSeg + (double)atrasoMs/1000.0;
-  int achados=0, i, k;
-  if (!dst || max<=0) return 0;
-  pthread_mutex_lock(&trava);
-  k = primeiroDepois(t);
-  // ANDA PARA TRAS e para no primeiro bloco que comecou antes da janela da
-  // maior duracao do arquivo: dali para tras nao existe bloco que ainda possa
-  // estar no ar. Sem esse limite a varredura seria o arquivo inteiro, a cada
-  // quadro — e um ASS de anime tem milhares de eventos.
-  for (i=k-1; i>=0 && achados<max; i--) {
-    if (cues[i].inicio < t - maiorDur) break;
-    if (t >= cues[i].inicio && t <= cues[i].fim) dst[achados++]=cues[i];
-  }
-  pthread_mutex_unlock(&trava);
-  // A varredura devolve do mais NOVO para o mais antigo; quem desenha espera a
-  // ordem do arquivo.
-  for (i=0;i<achados/2;i++) {
-    LegendaCue tmp=dst[i]; dst[i]=dst[achados-1-i]; dst[achados-1-i]=tmp;
-  }
-  return achados;
-}
-
-int legenda_texto(double posSeg,int atrasoMs,char *dst,size_t tam) {
-  LegendaCue c;
-  if(!dst||!tam)return 0;
-  dst[0]=0;
-  if(legenda_cues(posSeg,atrasoMs,&c,1)!=1)return 0;
-  snprintf(dst,tam,"%s",c.texto);
-  return 1;
+int legenda_texto(double pos,int delay,char *out,size_t cap){if(!out||!cap)return 0;out[0]=0;LegendaCue c;if(!legenda_cues(pos,delay,&c,1))return 0;snprintf(out,cap,"%s",c.texto);return 1;}
+int legenda_falas(double pos,int offset,LegendaCue *out,int max,int *focus,int *first,int *total){
+  if(focus)*focus=-1;if(first)*first=0;if(total)*total=0;if(!out||max<=0)return 0;
+  pthread_mutex_lock(&lock);int n=active?active->n:0;if(total)*total=n;if(!n){pthread_mutex_unlock(&lock);return 0;}int at=upper(pos)-1;if(at<0)at=0;if(at<n-1&&pos>=active->cue[at].fim&&fabs(active->cue[at+1].inicio-pos)<fabs(pos-active->cue[at].fim))at++;
+  at+=offset;if(at<0)at=0;if(at>=n)at=n-1;int start=at-max/2;if(start<0)start=0;if(start+max>n)start=n>max?n-max:0;int k=n-start;if(k>max)k=max;memcpy(out,active->cue+start,(size_t)k*sizeof *out);
+  if(focus)*focus=at-start;if(first)*first=start;pthread_mutex_unlock(&lock);return k;
 }

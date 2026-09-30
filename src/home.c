@@ -727,6 +727,17 @@ static const char *arte_por_identidade(int indice, int deitado) {
 static const char *arte_continuar_do_item(const CatItem *item) {
   if (item && !strcmp(item->tipo, "series") &&
       ajustes_cw_thumb_episodio()) {
+    // O arco pode ter ID proprio na conta (Lizzie: tmdb:299939 S1E1).
+    // A miniatura da ficha desse titulo vence qualquer still montado pelo
+    // ID da serie mae; as temporadas da antologia tem imagens diferentes.
+    int indice = cat_indice_por_imdb(item->imdb);
+    if (indice >= 0)
+      for (int i = 0; i < cat_n_episodios(indice); i++) {
+        const CatEp *e = cat_episodio(indice, i);
+        if (e && e->temporada == item->temporada &&
+            e->episodio == item->episodio && e->thumb[0] &&
+            !tex_falhou(e->thumb)) return e->thumb;
+      }
     const char *ep = artehero_url_episodio(item);
     if (ep && !tex_falhou(ep)) return ep;
   }
@@ -2637,7 +2648,8 @@ static void desenhaHero(Uint32 agora, float saida) {
   //
   // O conteudo de cada linha vem de buildModernHeroPresentation
   // (homeScreen.js:2497), que separa o caso "continuar assistindo" do resto.
-  int contHero = (ci && ci->progresso > 0 && ci->restanteMin > 0);
+  int contHero = (ci && ((ci->progresso > 0 && ci->restanteMin > 0) ||
+                         (ci->posicaoSeg > 0 && ci->restanteMin <= 0)));
   int seguirHero = (ci && ci->progresso == 0 && (trakt_e_a_seguir(ci->imdb) || simkl_e_a_seguir(ci->imdb)));
 
   // Linha de meta. No web sao tokens juntados por "•"; ci->genero ja chega
@@ -2669,8 +2681,13 @@ static void desenhaHero(Uint32 agora, float saida) {
   // no outro caso ele vai para o fim da linha de meta.
   char destaque[64];
   destaque[0] = 0;
-  if (contHero) snprintf(destaque, sizeof destaque, i18n("CONTINUAR DE ONDE PAROU  \xc2\xb7  %d MIN"),
-                         ci->restanteMin);
+  if (contHero && ci->restanteMin > 0)
+    snprintf(destaque, sizeof destaque, i18n("CONTINUAR DE ONDE PAROU  \xc2\xb7  %d MIN"),
+             ci->restanteMin);
+  else if (contHero)
+    snprintf(destaque, sizeof destaque, "%s  \xc2\xb7  %d:%02d",
+             !ajustes_idioma_ingles() ? "CONTINUAR DE ONDE PAROU" : "RESUME PLAYBACK",
+             (int)ci->posicaoSeg / 60, (int)ci->posicaoSeg % 60);
   else if (seguirHero) {
     // O FUTURO DIZ QUANDO (issue #127): "ESTREIA 21 OUT", nao o "A SEGUIR" do
     // episodio que ja pode tocar. Mesma decisao e mesma data do card
