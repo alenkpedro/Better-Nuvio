@@ -1,5 +1,6 @@
 // Navegacao superior: perfil a esquerda, destinos ao centro, ajustes e hora
-// a direita. O grupo central revela os rotulos ao receber foco ou hover.
+// a direita. A capsula central cresce a partir do centro e revela os rotulos,
+// como a navegacao do Nuvio Desktop, por hover ou foco do controle remoto.
 #include "menu.h"
 #include "perfis.h"
 #include "tex_cache.h"
@@ -16,8 +17,9 @@
 
 #define NAV_Y             28.0f
 #define NAV_H             72.0f
-#define NAV_W_FECHADA    520.0f
-#define NAV_W_ABERTA    1080.0f
+#define NAV_CELULA_FECHADA 76.0f
+#define NAV_CELULA_ABERTA 200.0f
+#define NAV_MARGEM          8.0f
 #define NAV_ICONE         34.0f
 #define NAV_AVATAR        50.0f
 #define NAV_PERFIL_X      76.0f
@@ -27,8 +29,8 @@
 #define NAV_POP_Y        112.0f
 #define NAV_POP_W        372.0f
 #define NAV_POP_LINHA_H   70.0f
-#define NAV_ABRIR_MS     240.0f
-#define NAV_FECHAR_MS    170.0f
+#define NAV_ABRIR_MS     280.0f
+#define NAV_FECHAR_MS    220.0f
 
 // IDs legados continuam no enum. Ajustes fica fora do grupo central.
 static const MenuDestino VISIVEIS[] = {
@@ -55,6 +57,7 @@ static int mudou;
 static int pediuTrocarPerfil, pediuGerenciar;
 static float expansao;
 static float animFoco[NAV_ITENS];
+static float realce, realceVel, realceAlpha;
 
 static int indiceVisivel(int d) {
   for (int i = 0; i < nDestinos(); i++) if (VISIVEIS[indiceReal(i)] == d) return i;
@@ -62,9 +65,9 @@ static int indiceVisivel(int d) {
 }
 
 static float largura(void) {
-  return anim_mistura(ajustes_menu_descobrir() ? NAV_W_FECHADA : 488.0f,
-                      ajustes_menu_descobrir() ? NAV_W_ABERTA : 904.0f,
-                      anim_suave(expansao));
+  float celula = anim_mistura(NAV_CELULA_FECHADA, NAV_CELULA_ABERTA,
+                              anim_suave(expansao));
+  return celula * nDestinos() + 2.0f * NAV_MARGEM;
 }
 
 static int focoDestino(int d) {
@@ -82,6 +85,8 @@ int menu_iniciar(void) {
   destino = MENU_INICIO;
   linha = FOCO_INICIO;
   expansao = 0;
+  realce = realceVel = 0;
+  realceAlpha = 1;
   for (int i = 0; i < NAV_ITENS; i++) animFoco[i] = 0;
   return 1;
 }
@@ -126,12 +131,16 @@ const char *menu_rotulo(int d) {
 static void escolher(void) {
   int novo = linha == focoAjustes() ? MENU_AJUSTES : VISIVEIS[indiceReal(linha - FOCO_INICIO)];
   if (novo != destino) { destino = novo; mudou = 1; }
-  menu_fechar();
+  // O clique troca a tela, mas o cursor continua sobre a capsula. Recolher
+  // aqui fazia os destinos fugirem da mao antes do proximo movimento.
+  if (!abertoPonteiro) menu_fechar();
 }
 
 void menu_evento(const SDL_Event *e) {
   if (!aberto || e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+  if (k == SDLK_LEFT || k == SDLK_RIGHT || k == SDLK_UP)
+    abertoPonteiro = 0;
   if (popupAberto) {
     if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
         k == SDLK_DELETE || k == SDLK_LEFT) { popupAberto = 0; return; }
@@ -189,6 +198,13 @@ void menu_atualizar(float dt, Uint32 agora) {
   for (int i = 0; i < NAV_ITENS; i++)
     animFoco[i] = anim_mola(animFoco[i], aberto && i == linha ? 1.0f : 0.0f,
                             dt, aberto && i == linha ? NV_MOLA_FOCO : 60.0f);
+  // Com mouse, o destaque marca a tela ativa; com D-pad, acompanha o foco.
+  int alvo = aberto && !abertoPonteiro && expandir ?
+             linha - FOCO_INICIO : indiceVisivel(destino);
+  realceAlpha = anim_mola(realceAlpha, alvo >= 0 ? 1.0f : 0.0f, dt, 24.0f);
+  if (alvo >= 0)
+    realce = anim_mola2(&realceVel, realce, (float)alvo, dt, 24.0f);
+  realce = anim_clamp(realce, 0.0f, (float)(nDestinos() - 1));
 }
 
 static void ponteiroLinha(int i, int b) {
@@ -198,6 +214,15 @@ static void ponteiroLinha(int i, int b) {
   abertoPonteiro = 1;
   linha = i;
 }
+static void ponteiroCentro(int a, int b) {
+  (void)a; (void)b;
+  if (popupAberto) return;
+  if (!aberto) menu_abrir();
+  abertoPonteiro = 1;
+  if (linha < FOCO_INICIO || linha >= focoAjustes())
+    linha = focoDestino(destino == MENU_AJUSTES ? MENU_INICIO : destino);
+}
+static void ponteiroAbsorver(int a, int b) { (void)a; (void)b; }
 static void ponteiroFora(int a, int b) { (void)a; (void)b; menu_fechar(); }
 static void ponteiroPopupLinha(int i, int b) {
   (void)b;
@@ -304,11 +329,12 @@ void menu_desenhar(Uint32 agora) {
   (void)agora;
   float w = largura();
   float x = (NV_TELA_W - w) * .5f;
-  float cell = w / nDestinos();
+  float cell = (w - 2.0f * NAV_MARGEM) / nDestinos();
   float cy = NAV_Y + NAV_H * .5f;
   float ar, ag, ab;
   ajustes_acento(&ar, &ag, &ab);
   float corTinta = ajustes_acento_tinta(NULL, NULL, NULL);
+  gfx_vidro_topo_capturar();
 
   // O menu de perfis toma o ponteiro inteiro. Um clique fora o fecha sem
   // atravessar para o conteudo nem selecionar outro destino por acidente.
@@ -319,8 +345,10 @@ void menu_desenhar(Uint32 agora) {
     if (!popupAberto) {
       ponteiro_alvo(NAV_PERFIL_X - 42, NAV_Y - 4, 84, NAV_H + 8,
                     ponteiroLinha, NULL, FOCO_PERFIL, 0);
+      ponteiro_alvo(x, NAV_Y - 4, w, NAV_H + 8,
+                    ponteiroCentro, ponteiroAbsorver, 0, 0);
       for (int i = 0; i < nDestinos(); i++)
-        ponteiro_alvo(x + i * cell, NAV_Y - 4, cell, NAV_H + 8,
+        ponteiro_alvo(x + NAV_MARGEM + i * cell, NAV_Y - 4, cell, NAV_H + 8,
                       ponteiroLinha, NULL, i + FOCO_INICIO, 0);
       ponteiro_alvo(NAV_AJUSTES_X - 42, NAV_Y - 4, 84, NAV_H + 8,
                     ponteiroLinha, NULL, focoAjustes(), 0);
@@ -346,34 +374,40 @@ void menu_desenhar(Uint32 agora) {
     gfx_anel((GfxRect){NAV_PERFIL_X - 31, cy - 31, 62, 62},
              .5f, 2.0f, ar, ag, ab, 1);
 
-  // A secao ativa e o foco usam a cor de destaque do tema. O grupo nao tem
-  // uma capsula de fundo, portanto a arte permanece aparente entre os itens.
+  GfxRect capsula = {x, NAV_Y, w, NAV_H};
+  gfx_cor((GfxRect){x - 2, NAV_Y + 4, w + 4, NAV_H + 4},
+          .5f, 0, 0, 0, .18f);
+  gfx_vidro_topo_desenhar(capsula, .5f);
+  gfx_anel(capsula, .5f, 1.0f, 1, 1, 1, .10f);
+  if (realceAlpha > .01f)
+    gfx_cor((GfxRect){x + NAV_MARGEM + realce * cell + 2, NAV_Y + 6,
+                      cell - 4, NAV_H - 12},
+            .5f, ar, ag, ab, .52f * realceAlpha);
+
+  float revelar = anim_suave(expansao);
   for (int i = 0; i < nDestinos(); i++) {
-    float ix = x + i * cell;
+    float ix = x + NAV_MARGEM + i * cell;
     int atual = VISIVEIS[indiceReal(i)] == destino;
     float f = animFoco[i + FOCO_INICIO];
-    if (atual || f > .01f) {
-      GfxRect p = {ix + 5, NAV_Y + 4, cell - 10, NAV_H - 8};
-      if (f > .01f) botao_luz(p, f, 1.0f);
-      gfx_cor(p, .5f, ar, ag, ab, f > .01f ?
-              (atual ? .84f + .14f * f : .96f * f) : .84f);
-    }
-    float lum = (atual || f > .55f) ? corTinta : .74f;
-    float iconX = ix + cell * .5f;
+    if (abertoPonteiro && !atual && f > .01f)
+      gfx_cor((GfxRect){ix + 2, NAV_Y + 6, cell - 4, NAV_H - 12},
+              .5f, 1, 1, 1, .08f * f);
+    int focoTecla = aberto && !abertoPonteiro &&
+                   linha >= FOCO_INICIO && linha < focoAjustes();
+    float lum = ((focoTecla ? linha == i + FOCO_INICIO : atual) || f > .55f)
+                ? corTinta : .74f;
     int c = (int)(lum * 255.0f + .5f);
-    TxtLinha t = txt_linha(TXT_BODY, ROTULOS[indiceReal(i)], c, c, c, 255);
-    float contentW = NAV_ICONE + 15.0f + t.w;
-    // So revela o nome quando a celula ja tem largura para icone e texto.
-    // Durante a abertura, mostrar o texto desde o primeiro quadro fazia os
-    // rotulos se sobreporem no centro do menu.
-    float labelAlpha = anim_suave(anim_clamp((cell - contentW - 4.0f) / 24.0f,
-                                              0.0f, 1.0f));
-    float expandedX = ix + (cell - contentW) * .5f + NAV_ICONE * .5f;
-    iconX = anim_mistura(iconX, expandedX, labelAlpha);
+    TxtLinha t = txt_linha(TXT_CALLOUT, ROTULOS[indiceReal(i)], c, c, c, 255);
+    float textoW = (t.w + 14.0f) * revelar;
+    float iconX = ix + (cell - NAV_ICONE - textoW) * .5f + NAV_ICONE * .5f;
     icone(i, iconX, cy, NAV_ICONE, lum);
-    if (labelAlpha > .04f) {
-      txt_desenhar_alpha(t, iconX + NAV_ICONE * .5f + 15.0f,
-                         cy - t.h * .5f, labelAlpha);
+    if (textoW > 1.0f) {
+      float tx = iconX + NAV_ICONE * .5f + 14.0f * revelar;
+      // O texto ocupa so a largura revelada neste quadro: os nomes aparecem
+      // junto com a expansao, sem atravessar o icone ou a celula vizinha.
+      gfx_recorte(tx, NAV_Y, t.w * revelar, NAV_H);
+      txt_desenhar_alpha(t, tx, cy - t.h * .5f, revelar);
+      gfx_sem_recorte();
     }
   }
 

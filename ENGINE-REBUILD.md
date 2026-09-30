@@ -65,6 +65,15 @@ episódio confirmado continua visível durante atualização e falha de metadado
 
 ## Distribuição
 
-APK 0.1.25 (versionCode 26) e IPK 1.5.33 compilados com o mesmo núcleo.
+APK 0.1.26 (versionCode 27) e IPK 1.5.34 compilados com o mesmo núcleo.
 A validação física no Fire TV e na LG ainda está pendente. O teste Mac usa
 FFmpeg/libass e o mesmo serviço de extração incluído no IPK.
+
+## Navegação (1.5.34 / 0.1.26)
+
+A barra superior agora usa uma cápsula que expande por hover ou D-pad. O vidro
+lê somente a faixa atrás dela e aplica duas passadas de desfoque em 280×32,
+com alvos reutilizados durante a animação. Os nomes são revelados com recorte
+e o ajuste de movimento reduzido continua respeitado. A verificação GL no Mac
+cobriu transparência, mouse, clique, D-pad, recolhimento, resize e restauração
+do framebuffer. O comportamento nas TVs ainda depende do teste físico.

@@ -46,6 +46,325 @@
           "value": "public, max-age=31536000, immutable"
         }
       ]
+    },
+    {
+      "source": "/(android/latest.json|releases/latest.json)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.13-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.13-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/com.betternuvio.app_1.5.27_arm.ipk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.webos.ipk"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=com.betternuvio.app_1.5.27_arm.ipk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.14-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.14-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/com.betternuvio.app_1.5.28_arm.ipk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.webos.ipk"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=com.betternuvio.app_1.5.28_arm.ipk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.15-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.15-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.16-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.16-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.21-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.21-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/com.betternuvio.app_1.5.29_arm.ipk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.webos.ipk"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=com.betternuvio.app_1.5.29_arm.ipk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.22-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.22-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/com.betternuvio.app_1.5.30_arm.ipk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.webos.ipk"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=com.betternuvio.app_1.5.30_arm.ipk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/com.betternuvio.app_1.5.31_arm.ipk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/octet-stream"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=com.betternuvio.app_1.5.31_arm.ipk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.23-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.23-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.24-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.24-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/com.betternuvio.app_1.5.32_arm.ipk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.webos.ipk"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=com.betternuvio.app_1.5.32_arm.ipk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.25-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.25-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/com.betternuvio.app_1.5.33_arm.ipk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.webos.ipk"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=com.betternuvio.app_1.5.33_arm.ipk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/better-nuvio-android-tv-0.1.26-firetv-4k-max-2-debug.apk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/vnd.android.package-archive"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=better-nuvio-android-tv-0.1.26-firetv-4k-max-2-debug.apk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/com.betternuvio.app_1.5.34_arm.ipk",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/octet-stream"
+        },
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=com.betternuvio.app_1.5.34_arm.ipk"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
     }
   ]
 }
