@@ -1,12 +1,12 @@
 {
-  "tag_name": "v1.5.37",
-  "body": "## Acabamento do menu de navegação\n- Removida a camada escura deslocada que criava uma faixa dura abaixo e nas laterais do menu.\n- O menu mantém o vidro com desfoque, transparência e expansão ao receber foco.\n- Conferido no Mac nos estados compacto e expandido, com mouse e controle.\n",
+  "tag_name": "v1.5.38",
+  "body": "## Estilo das legendas embutidas\n- Legendas embutidas de texto passam a usar o mesmo estilo das externas, com os ajustes de tamanho, cor, contorno e posição.\n- Corrigida a transição para o estilo do app em arquivos com mais de 32 legendas.\n- Legendas ASS/SSA mantêm suas placas e efeitos.\n",
   "assets": [
     {
-      "name": "com.betternuvio.app_1.5.37_arm.ipk",
-      "size": 52085706,
-      "digest": "sha256:19ab2dd9e0a33ff22d5f5af053cdaca66190a8d5cefcf51633c9f114e49fcbf4",
-      "browser_download_url": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.37_arm.ipk"
+      "name": "com.betternuvio.app_1.5.38_arm.ipk",
+      "size": 52085568,
+      "digest": "sha256:6efa37297a6e8b534110843ca968b1d375cd066016e95a35e19eff2d9153b1ea",
+      "browser_download_url": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.38_arm.ipk"
     }
   ]
 }

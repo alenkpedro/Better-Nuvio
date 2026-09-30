@@ -1,12 +1,12 @@
 {
-  "tag_name": "v0.1.29",
-  "body": "## Acabamento do menu de navegação\n- Removida a camada escura deslocada que criava uma faixa dura abaixo e nas laterais do menu.\n- O menu mantém o vidro com desfoque, transparência e expansão ao receber foco.\n- Conferido no Mac nos estados compacto e expandido, com mouse e controle.\n",
+  "tag_name": "v0.1.30",
+  "body": "## Faixas de legenda\n- Ampliada a lista de faixas embutidas para arquivos com mais de 32 legendas.\n- Mantidos os ajustes de estilo compartilhados com as legendas externas.\n",
   "assets": [
     {
-      "name": "better-nuvio-android-tv-0.1.29-firetv-4k-max-2-debug.apk",
-      "size": 39031056,
-      "digest": "sha256:d8418db0e9ecff3aea30acd0759857c5aabbef53e60b0e9fa1de3e9efda61fee",
-      "browser_download_url": "https://betternuvio.vercel.app/better-nuvio-android-tv-0.1.29-firetv-4k-max-2-debug.apk"
+      "name": "better-nuvio-android-tv-0.1.30-firetv-4k-max-2-debug.apk",
+      "size": 39031164,
+      "digest": "sha256:8b47a6f4a59e8968147c616dc16fd7be79b45a92c7f14e7b0f95f96124361cc1",
+      "browser_download_url": "https://betternuvio.vercel.app/better-nuvio-android-tv-0.1.30-firetv-4k-max-2-debug.apk"
     }
   ]
 }

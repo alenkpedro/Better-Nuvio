@@ -106,3 +106,22 @@ Verificações: respostas capturadas e anonimizadas de Idiotas (17 opções PT-B
 headers, ordenação e badge único. Reprodução de duas faixas AAC (440/880 Hz)
 confirma o áudio decodificado após cada troca. SRT e ASS continuam surgindo em
 2,100 s do vídeo com erro medido abaixo de 4 ms nos arquivos de teste.
+
+## Estilo das legendas embutidas — IPK 1.5.38 / APK 0.1.30
+
+A lista de faixas passou de 32 para 128 e o cabeçalho Matroska comporta 256
+faixas totais, incluindo vídeo e áudio. O corte em 32 fazia o casamento por
+ordinal recusar um arquivo de 43 legendas; sem codec/ordinal, a seleção ficava
+no desenho nativo da TV e não chegava ao estilo do app.
+
+O extrator entrega VTT para texto SubRip, que usa o mesmo desenho das
+legendas externas SRT/VTT. ASS/SSA continuam no libass para conservar placas
+e efeitos. A legenda nativa fica visível durante a preparação; a transição
+para o overlay ocorre quando a janela extraída está pronta.
+
+Verificação: um MKV com 43 legendas, seleção da última faixa, extração real
+pelo serviço oficial, pausa, seek e troca de seleção. As imagens de texto
+embutido e externo foram iguais pixel a pixel com estilos padrão e
+personalizado. O primeiro texto apareceu em 2,100–2,103 s para o timestamp
+de 2,100 s nos fixtures do Mac. O arquivo filmado e a LG precisam da validação
+física após instalar este pacote.

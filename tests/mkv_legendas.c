@@ -5,6 +5,7 @@
 // A LG lista essas legendas com trackNum 0, 1, 2 (MEDIDO na C9 num Erai-raws
 // de 8 legendas: 0..7 contra TrackNumber 3..10).
 #include "../src/mkv.h"
+#include "../src/video.h"
 #include "../src/rede.h"
 #include "../src/dados.h"
 #include <stdio.h>
@@ -56,6 +57,26 @@ int main(int argc, char **argv) {
   { int tv[3] = { 1, 2, 3 };     // nem ordinal (3 fora) nem TrackNumber (1, 2 nao sao legenda)
     ok(mkv_casar_legendas(fx, n, tv, 3, idx) == MKV_CASA_NADA,
        "trackNum que cairia no video/audio nao casa"); }
+
+  printf("\n[3] release com 43 legendas: transicao para o overlay do app\n");
+  {
+    MkvFaixa muitas[45] = {{0}};
+    int tv[43], pares[43], completo=1;
+    muitas[0].tipo=1;muitas[0].numero=1;
+    muitas[1].tipo=2;muitas[1].numero=2;
+    for(int i=0;i<43;i++) {
+      muitas[i+2].tipo=17;muitas[i+2].numero=i+3;
+      snprintf(muitas[i+2].codec,sizeof muitas[i+2].codec,"S_TEXT/UTF8");
+      tv[i]=i;
+    }
+    ok(NV_FAIXA_MAX>=43,"painel comporta todas as 43 legendas");
+    ok(MKV_MAX_FAIXAS>NV_FAIXA_MAX,"cabecalho reserva espaco para video e audio");
+    ok(mkv_casar_legendas(muitas,45,tv,32,pares)==MKV_CASA_NADA,
+       "antigo corte em 32 bloqueava todos os ordinais");
+    modo=mkv_casar_legendas(muitas,45,tv,43,pares);
+    for(int i=0;i<43;i++)if(pares[i]!=i+2)completo=0;
+    ok(modo==MKV_CASA_ORDINAL&&completo,"43 legendas recebem o codec e o ordinal corretos");
+  }
 
   printf("\n%s (%d falha%s)\n", falhas ? "FALHOU" : "tudo ok", falhas, falhas == 1 ? "" : "s");
   return falhas ? 1 : 0;

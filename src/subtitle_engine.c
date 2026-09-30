@@ -17,7 +17,7 @@
 #define BODY_LIMIT (4 * 1024 * 1024)
 typedef struct {
   unsigned selection, request;
-  int ordinal;
+  int ordinal, ass;
   double start;
   char url[4096];
 } WindowRequest;
@@ -54,7 +54,7 @@ static void *loadWindow(void *arg) {
   jsw_cs(&w,"url",q->url); jsw_ci(&w,"trackOrdinal",q->ordinal);
   jsw_ci(&w,"startSeconds",(long long)q->start);
   jsw_ci(&w,"endSeconds",(long long)(q->start+WINDOW_SECONDS));
-  jsw_chave(&w,"includeAssBody"); jsw_bool(&w,1); jsw_obj_fim(&w);
+  jsw_chave(&w,"includeAssBody"); jsw_bool(&w,q->ass); jsw_obj_fim(&w);
   ensureService();
   int status=0;
   const char *endpoint=getenv("NUVIO_SUBTITLE_SERVICE_URL");
@@ -65,7 +65,9 @@ static void *loadWindow(void *arg) {
     const char *end=js_fim(response);
     r->body=calloc(1,BODY_LIMIT+1);
     if(r->body) {
-      js_texto_linhas(response,end,"assBody",r->body,BODY_LIMIT+1);
+      /* Text tracks use the same overlay as external SRT/VTT. Generating an
+       * ASS document for every SRT track changed its font metrics and style. */
+      if(q->ass)js_texto_linhas(response,end,"assBody",r->body,BODY_LIMIT+1);
       if(!r->body[0]) js_texto_linhas(response,end,"body",r->body,BODY_LIMIT+1);
       r->start=js_num(response,end,"windowStartSeconds",q->start);
       r->end=js_num(response,end,"windowEndSeconds",q->start+WINDOW_SECONDS);
@@ -104,6 +106,8 @@ static void requestWindow(double time,int ordinal) {
   WindowRequest *q=calloc(1,sizeof *q);if(!q)return;
   pthread_mutex_lock(&mu);q->selection=selection;q->request=++request;pthread_mutex_unlock(&mu);
   q->ordinal=ordinal;q->start=floor(fmax(0,time)/90.0)*90.0;loadingStart=q->start;
+  const VideoFaixa *track=video_legenda(selected);
+  q->ass=track && (!strcmp(track->codec,"S_TEXT/ASS") || !strcmp(track->codec,"S_TEXT/SSA"));
   snprintf(q->url,sizeof q->url,"%s",sourceUrl);
   pthread_t thread;
   if(pthread_create(&thread,NULL,loadWindow,q)){free(q);errorNotice=1;failedAt=SDL_GetTicks()|1u;return;}

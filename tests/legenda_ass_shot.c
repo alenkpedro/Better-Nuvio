@@ -194,6 +194,28 @@ int main(int argc, char **argv) {
     legenda_definir_corpo(SRT_TRES_LINHAS);
     snprintf(nome, sizeof nome, "%s-netflix-refluida.bmp", saida); captura(nome, w);
   }
+  {
+    const char *text="Mesmo estilo nas legendas embutidas e externas.\nSegunda linha para conferir a posição.";
+    char srt[768],vtt[768],external[600],embedded[600];
+    snprintf(srt,sizeof srt,"1\n00:00:00,000 --> 01:00:00,000\n%s\n\n",text);
+    snprintf(vtt,sizeof vtt,"WEBVTT\n\n00:00:00.000 --> 01:00:00.000\n%s\n\n",text);
+    for(int custom=0;custom<2;custom++) {
+      *player_leg_estilo()=custom?(VideoLegendaEstilo){140,2,2,15,1,1,0,0}:
+        (VideoLegendaEstilo){100,0,0,5,2,0,0,0};
+      player_leg_estilo_mudou();
+      legenda_definir_corpo(srt);legenda_bombear();assert(!assrender_ativo());
+      snprintf(external,sizeof external,"%s-style-%d-external.bmp",saida,custom);
+      captura(external,w);
+      assert(legenda_instalar_janela(vtt,legenda_geracao()));legenda_bombear();assert(!assrender_ativo());
+      snprintf(embedded,sizeof embedded,"%s-style-%d-embedded.bmp",saida,custom);
+      captura(embedded,w);
+      SDL_Surface *a=SDL_LoadBMP(external),*b=SDL_LoadBMP(embedded);assert(a&&b);
+      assert(a->w==b->w&&a->h==b->h&&a->pitch==b->pitch);
+      assert(!memcmp(a->pixels,b->pixels,(size_t)a->pitch*a->h));
+      SDL_FreeSurface(a);SDL_FreeSurface(b);
+      printf("PASS: estilo %s identico pixel a pixel para SRT externo e VTT embutido\n",custom?"personalizado":"padrao");
+    }
+  }
   puts("legenda_ass_shot: ok");
   return 0;
 }
