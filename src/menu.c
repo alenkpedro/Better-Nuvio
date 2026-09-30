@@ -375,8 +375,6 @@ void menu_desenhar(Uint32 agora) {
              .5f, 2.0f, ar, ag, ab, 1);
 
   GfxRect capsula = {x, NAV_Y, w, NAV_H};
-  gfx_cor((GfxRect){x - 2, NAV_Y + 4, w + 4, NAV_H + 4},
-          .5f, 0, 0, 0, .18f);
   gfx_vidro_topo_desenhar(capsula, .5f);
   gfx_anel(capsula, .5f, 1.0f, 1, 1, 1, .10f);
   if (realceAlpha > .01f)

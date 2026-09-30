@@ -1,12 +1,12 @@
 {
-  "tag_name": "v0.1.28",
-  "body": "## Legendas como no Nuvio Enhanced\n- Nome do addon em um selo pequeno, idioma na linha principal e identificador ou nome do arquivo abaixo.\n- Opções ordenadas pela informação da legenda, como no Enhanced.\n- Nomes completos de idioma são interpretados antes do agrupamento: “Make Portuguese (Brazilian)” entra em Português (Brasil).\n- Consulta inclui nome, hash e tamanho exato do arquivo quando o addon fornece esses dados.\n- Listas maiores por provedor e cabeçalhos necessários ao download são preservados.\n- O player de teste no Mac lista e permite trocar as faixas reais de áudio, mantendo a posição e a pausa.\n",
+  "tag_name": "v0.1.29",
+  "body": "## Acabamento do menu de navegação\n- Removida a camada escura deslocada que criava uma faixa dura abaixo e nas laterais do menu.\n- O menu mantém o vidro com desfoque, transparência e expansão ao receber foco.\n- Conferido no Mac nos estados compacto e expandido, com mouse e controle.\n",
   "assets": [
     {
-      "name": "better-nuvio-android-tv-0.1.28-firetv-4k-max-2-debug.apk",
-      "size": 41169023,
-      "digest": "sha256:ae82d1832b1cf233f1d39508d8709e63cc950a0a21d673fae885649f10e4034c",
-      "browser_download_url": "https://betternuvio.vercel.app/better-nuvio-android-tv-0.1.28-firetv-4k-max-2-debug.apk"
+      "name": "better-nuvio-android-tv-0.1.29-firetv-4k-max-2-debug.apk",
+      "size": 39031056,
+      "digest": "sha256:d8418db0e9ecff3aea30acd0759857c5aabbef53e60b0e9fa1de3e9efda61fee",
+      "browser_download_url": "https://betternuvio.vercel.app/better-nuvio-android-tv-0.1.29-firetv-4k-max-2-debug.apk"
     }
   ]
 }
