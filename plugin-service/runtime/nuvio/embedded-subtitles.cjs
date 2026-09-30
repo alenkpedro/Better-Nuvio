@@ -1,6 +1,7 @@
 var http = require("http");
 var https = require("https");
 var zlib = require("zlib");
+var legacyUrl = require("url");
 
 var HEADER_PROBE_BYTES = 2 * 1024 * 1024;
 var CUES_PROBE_BYTES = 64 * 1024;
@@ -215,16 +216,17 @@ function requestRange(url, start, end, maxBytes, redirects, requestContext) {
     }
 
     var transport = parsed.protocol === "https:" ? https : http;
-    var req = transport.request(
-      parsed,
-      {
-        method: "GET",
-        headers: {
+    // Node 0.12/8 on webOS do not support request(URL, options, callback).
+    // Keep the official Range algorithm, using the portable options overload.
+    var options = legacyUrl.parse(parsed.href);
+    options.method = "GET";
+    options.headers = {
           Range: "bytes=" + start + "-" + end,
           "Accept-Encoding": "identity",
           "User-Agent": "NuvioTV/bitmap-subtitles"
-        }
-      },
+    };
+    var req = transport.request(
+      options,
       function (res) {
         var statusCode = Number(res.statusCode || 0);
         if (statusCode >= 300 && statusCode < 400 && res.headers.location) {

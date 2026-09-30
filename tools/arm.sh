@@ -212,6 +212,9 @@ if [ "$1" = "--ipk" ]; then
   PALCO=$(mktemp -d); LIXO="$LIXO $PALCO"
   cp -R deploy/app "$PALCO/app"
   cp -R plugin-service "$PALCO/com.betternuvio.app.plugin"
+  # Ship a self-contained ES5 service, not source requiring a modern Node.
+  # Building here ensures every IPK contains the runtime tested for webOS.
+  node tools/service-build.cjs "$PALCO/com.betternuvio.app.plugin/runtime/service.cjs"
   # cache/ e cache de EXECUCAO, nao arte do pacote: sao megabytes de imagem
   # baixada que o app rebaixa sozinho.
   rm -rf "$PALCO/app/art/cache"

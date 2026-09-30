@@ -21,6 +21,7 @@ for face in Regular Medium; do
   }
 done
 tools/env.sh --require-core >/dev/null
+node tools/service-build.cjs
 if ! pkg-config --exists libavformat libavcodec libavutil libswscale libswresample; then
   echo "FFmpeg de desenvolvimento ausente (pkg-config libavformat/libavcodec/libswscale/libswresample)" >&2
   exit 1
@@ -67,7 +68,7 @@ PLUGIN_PID=""
 if command -v node >/dev/null 2>&1 &&
    ! curl --silent --fail --max-time 1 http://127.0.0.1:2732/health >/dev/null 2>&1; then
   mkdir -p "$NUVIO_DADOS"
-  (umask 077; NUVIO_PLUGIN_STANDALONE=1 node plugin-service/src/index.js \
+  (umask 077; NUVIO_PLUGIN_STANDALONE=1 node plugin-service/runtime/service.cjs \
     >"$NUVIO_DADOS/plugin-service.log" 2>&1) &
   PLUGIN_PID=$!
   for tentativa in 1 2 3 4 5 6 7 8 9 10; do

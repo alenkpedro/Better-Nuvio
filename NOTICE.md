@@ -20,3 +20,9 @@ The embedded Matroska text subtitle extractor in
 `48a94b347837965e2e052f82707820c0dd7c8028`, copyright its contributors,
 distributed under GPL-3.0. The upstream license and source provenance accompany
 that file.
+
+The HTTP transport signature in that extractor is adapted for webOS Node
+0.12/8. The packaged service includes core-js 3.50.0 polyfills and Babel 7
+generated helpers under MIT. Their copyright notices and full license texts
+are included as `runtime/core-js.LICENSE` and `runtime/babel.LICENSE` alongside
+the compiled service in the IPK.

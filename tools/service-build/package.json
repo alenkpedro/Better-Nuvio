@@ -1,0 +1,11 @@
+{
+  "name": "better-nuvio-webos-service-build",
+  "private": true,
+  "scripts": { "build": "node ../service-build.cjs" },
+  "devDependencies": {
+    "@babel/core": "^7.28.5",
+    "@babel/preset-env": "^7.28.5",
+    "core-js": "3.50.0",
+    "esbuild": "0.28.2"
+  }
+}

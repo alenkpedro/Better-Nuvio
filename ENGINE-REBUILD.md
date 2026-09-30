@@ -8,7 +8,7 @@ um serviço próprio. Os dados de progresso antigos são importados sem apagar a
 ## Referências
 
 - NuvioTVSmart `48a94b347837965e2e052f82707820c0dd7c8028`: extrator oficial
-  `services/webos/src/bitmapSubtitles.js`, usado sem modificações pelo serviço
+  `services/webos/src/bitmapSubtitles.js`, com adaptação do transporte HTTP para o serviço
   local; contrato de progresso, seleção por título e retomada.
 - NuvioTV dev `fa6614384e23ff5808bf39c53dd3fa602055c54e`: tempo do Media3,
   cues e ajuste manual com compensação de reação ao controle.
@@ -125,3 +125,23 @@ embutido e externo foram iguais pixel a pixel com estilos padrão e
 personalizado. O primeiro texto apareceu em 2,100–2,103 s para o timestamp
 de 2,100 s nos fixtures do Mac. O arquivo filmado e a LG precisam da validação
 física após instalar este pacote.
+
+## Serviço de legendas na LG — IPK 1.5.39
+
+A validação física de 1.5.38 ainda mostrou o estilo nativo. Os testes anteriores
+usavam Node 26 no Mac e não cobriam o runtime do serviço na LG. A falha foi
+reproduzida em Node 0.12.2: o serviço enviado como fonte não iniciava por sintaxe
+incompatível. Em Node 8.17.0, o extrator rejeitava a URL por depender de `URL`
+global ausente. As respostas HTTP também usavam encadeamento de `writeHead`,
+indisponível nesses runtimes.
+
+O IPK passa a incluir um bundle ES5 com polyfills, compilado durante o
+empacotamento. O extrator oficial usa a assinatura HTTP compatível e o motor
+opcional de plugins só é inicializado quando necessário. O Mac executa o mesmo
+bundle que a TV. O estilo do texto extraído continua no renderer de SRT/VTT
+do app, conforme os testes da versão anterior.
+
+Verificação: o pacote real foi carregado pelo `main` de package.json em Node
+0.12.2 e 8.17.0. Ambos extraíram SRT, ASS e a última de 43 faixas em MKVs reais,
+seguiram redirect/HTTP Range e continuaram disponíveis após erro. O teste
+físico da LG permanece necessário para confirmar a instalação e a transição.

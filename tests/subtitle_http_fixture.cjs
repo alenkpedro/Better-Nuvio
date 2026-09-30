@@ -1,6 +1,6 @@
 const fs=require('fs');const path=require('path');const http=require('http');
 const root=process.argv[2];
-require('../plugin-service/src/index.js').start();
+require('../plugin-service').start();
 const server=http.createServer((req,res)=>{
   const name=path.basename(new URL(req.url,'http://localhost').pathname);
   const file=path.join(root,name);if(!fs.existsSync(file)){res.writeHead(404).end();return;}

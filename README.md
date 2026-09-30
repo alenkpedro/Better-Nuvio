@@ -22,6 +22,10 @@ Este repositório é um snapshot limpo do código atual do Better Nuvio. Ele nã
 
 Os componentes principais estão em `src/` (cliente nativo), `deploy/app/` (recursos), `plugin-service/` (executor local), `tools/` (build) e `tests/`. Para compilar no Mac, use `bash tools/mac.sh`; para LG, `bash tools/arm.sh --ipk`. Consulte [as notas de compilação](docs/ORIGINAL_BUILD_NOTES.md) para dependências e variáveis locais. Os arquivos de conta são criados localmente e não são distribuídos.
 
+Antes da primeira compilação, execute `npm ci --prefix tools/service-build`.
+O Mac e o IPK usam o mesmo serviço de legendas compilado para o Node antigo
+do webOS. Veja [o build do serviço](tools/service-build/README.md).
+
 O player precisa dos arquivos locais `NetflixSans-Regular.otf` e `NetflixSans-Medium.otf` em `deploy/app/fonts` para manter a tipografia das legendas. Eles não fazem parte do repositório; os scripts de compilação recusam um pacote sem esses arquivos, evitando substituição silenciosa da fonte.
 
 ## Créditos

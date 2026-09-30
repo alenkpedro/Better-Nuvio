@@ -1,6 +1,6 @@
 {
   "id": "com.betternuvio.app",
-  "version": "1.5.38",
+  "version": "1.5.39",
   "vendor": "Better Nuvio",
   "type": "native",
   "main": "nuvio-proto",
