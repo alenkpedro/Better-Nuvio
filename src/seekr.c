@@ -22,10 +22,13 @@ static char imdbAtual[64], chaveAtual[80], contaArquivo[48];
 static long tmdbAtual;
 static int temporadaAtual, episodioAtual, consultaFeita, prefetchFeito, limitarContaAtual;
 static SeekrCue *cues;
-static int nCues, cueDesejado = -1, cuePronto = -1, cueEmCurso = -1, cueFalho = -1;
+static int nCues, cuePronto = -1, cueEmCurso = -1, janela[SEEKR_PREVIAS];
 static double escala = 1.0;
 static SDL_Surface *superficiePronta;
-static GLuint textura;
+#define SEEKR_CACHE 9
+typedef struct { int cue, falhou; GLuint tex; unsigned uso; Uint32 falhouEm; } QuadroCache;
+static QuadroCache quadrosCache[SEEKR_CACHE];
+static unsigned usoCacheQuadros;
 static char *sheetCache;
 static long sheetBytes;
 static char sheetUrl[768];
@@ -154,7 +157,8 @@ static void *consultar(void *arg) {
 void seekr_preparar(const char *imdb, long tmdb, int t, int e) {
   pthread_mutex_lock(&trava);
   geracao++; free(cues); cues=NULL; nCues=0; consultaFeita=prefetchFeito=0;
-  cueDesejado=cuePronto=cueEmCurso=cueFalho=-1; escala=1.0;
+  cuePronto=cueEmCurso=-1; escala=1.0;
+  for (int i=0;i<SEEKR_PREVIAS;i++)janela[i]=-1;
   if (superficiePronta) { SDL_FreeSurface(superficiePronta); superficiePronta=NULL; }
   free(sheetCache); sheetCache=NULL; sheetBytes=0; sheetUrl[0]=0;
   snprintf(imdbAtual,sizeof imdbAtual,"%s",imdb?imdb:"");
@@ -163,7 +167,11 @@ void seekr_preparar(const char *imdb, long tmdb, int t, int e) {
   lerChavePessoal(chaveAtual,sizeof chaveAtual);
   limitarContaAtual=0;
   pthread_mutex_unlock(&trava);
-  if (textura) { gfx_tex_esquecer(textura); glDeleteTextures(1,&textura); textura=0; }
+  for(int i=0;i<SEEKR_CACHE;i++) {
+    if(quadrosCache[i].tex) {gfx_tex_esquecer(quadrosCache[i].tex);glDeleteTextures(1,&quadrosCache[i].tex);}
+    quadrosCache[i]=(QuadroCache){.cue=-1};
+  }
+  usoCacheQuadros=0;
 }
 void seekr_fechar(void) { seekr_preparar(NULL,0,0,0); }
 void seekr_duracao(double segundos) {
@@ -237,11 +245,9 @@ static void *baixarTile(void *arg) {
   }
   free(jpeg);
   pthread_mutex_lock(&trava);
-  if (q->gen==geracao && q->indice==cueDesejado) {
-    if (corte) {
-      if (superficiePronta) SDL_FreeSurface(superficiePronta);
-      superficiePronta=corte; corte=NULL; cuePronto=q->indice;
-    } else cueFalho=q->indice;
+  if (q->gen==geracao) {
+    if (superficiePronta) SDL_FreeSurface(superficiePronta);
+    superficiePronta=corte; corte=NULL; cuePronto=q->indice;
   }
   if (q->gen==geracao && cueEmCurso==q->indice) cueEmCurso=-1;
   pthread_mutex_unlock(&trava);
@@ -251,37 +257,73 @@ static void *baixarTile(void *arg) {
 void seekr_bombear(void) {
   SDL_Surface *s=NULL; int i=-1;
   pthread_mutex_lock(&trava);
-  if (superficiePronta) { s=superficiePronta; superficiePronta=NULL; i=cuePronto; }
+  if (cuePronto>=0) { s=superficiePronta; superficiePronta=NULL; i=cuePronto; cuePronto=-1; }
   pthread_mutex_unlock(&trava);
-  if (!s) return;
-  if (textura) { gfx_tex_esquecer(textura); glDeleteTextures(1,&textura); textura=0; }
-  glGenTextures(1,&textura); glBindTexture(GL_TEXTURE_2D,textura);
-  glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,s->w,s->h,0,GL_RGBA,GL_UNSIGNED_BYTE,s->pixels);
-  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
-  gfx_tex_esquecer(0); SDL_FreeSurface(s);
-  pthread_mutex_lock(&trava); cuePronto=i; pthread_mutex_unlock(&trava);
+  if(i<0)return;
+  // Somente este fio usa as texturas. Um worker entrega no maximo um corte,
+  // e o cache conserva a janela atual antes de substituir os quadros antigos.
+  int slot=-1;
+  for(int j=0;j<SEEKR_CACHE;j++)if(quadrosCache[j].cue==i || quadrosCache[j].cue<0){slot=j;break;}
+  if(slot<0)for(int j=0;j<SEEKR_CACHE;j++) {
+    int protegido=0;for(int k=0;k<SEEKR_PREVIAS;k++)if(quadrosCache[j].cue==janela[k])protegido=1;
+    if(!protegido && (slot<0 || quadrosCache[j].uso<quadrosCache[slot].uso))slot=j;
+  }
+  if(slot<0){if(s)SDL_FreeSurface(s);return;}
+  QuadroCache *c=&quadrosCache[slot];
+  if(c->tex){gfx_tex_esquecer(c->tex);glDeleteTextures(1,&c->tex);}
+  *c=(QuadroCache){.cue=i,.falhou=!s,.falhouEm=SDL_GetTicks(),.uso=++usoCacheQuadros};
+  if(s) {
+    glGenTextures(1,&c->tex);glBindTexture(GL_TEXTURE_2D,c->tex);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,s->w,s->h,0,GL_RGBA,GL_UNSIGNED_BYTE,s->pixels);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+    gfx_tex_esquecer(0);SDL_FreeSurface(s);
+  }
 }
-int seekr_previa(double segundos, GLuint *tex, double *cueSegundos) {
-  Tile *q=NULL; int i;
+int seekr_faixa(double segundos,SeekrPrevia saida[SEEKR_PREVIAS]) {
+  Tile *q=NULL;int i;
+  if(saida)memset(saida,0,sizeof(SeekrPrevia)*SEEKR_PREVIAS);
   pthread_mutex_lock(&trava);
   i=seekr_escolher_cue(cues,nCues,segundos/escala);
-  if (i>=0 && i!=cueDesejado) cueDesejado=i;
-  if (i>=0 && i!=cueFalho && cueEmCurso<0 &&
-      (i!=cuePronto || !textura) && !superficiePronta) {
-    q=calloc(1,sizeof *q);
-    if (q) { q->gen=geracao; q->indice=i; q->cue=cues[i]; cueEmCurso=i; }
+  for(int k=0;k<SEEKR_PREVIAS;k++) {
+    int indice=i>=0?i+k-SEEKR_PREVIAS/2:-1;
+    janela[k]=indice>=0 && indice<nCues?indice:-1;
+    if(janela[k]<0 || !saida)continue;
+    saida[k]=(SeekrPrevia){.valido=1,.segundos=cues[indice].inicio*escala,
+                           .aspecto=(float)cues[indice].w/cues[indice].h};
+    for(int j=0;j<SEEKR_CACHE;j++)if(quadrosCache[j].cue==indice) {
+      saida[k].tex=quadrosCache[j].tex;quadrosCache[j].uso=++usoCacheQuadros;break;
+    }
   }
-  int pronto=i>=0 && i==cuePronto && textura;
-  if (pronto) { if (tex) *tex=textura; if (cueSegundos) *cueSegundos=cues[i].inicio*escala; }
+  if(i>=0 && cueEmCurso<0 && cuePronto<0) {
+    static const int prioridade[SEEKR_PREVIAS]={2,1,3,0,4};
+    for(int k=0;k<SEEKR_PREVIAS;k++) {
+      int indice=janela[prioridade[k]],pronto=0;
+      if(indice<0)continue;
+      for(int j=0;j<SEEKR_CACHE;j++)if(quadrosCache[j].cue==indice) {
+        pronto=quadrosCache[j].tex || (quadrosCache[j].falhou && SDL_GetTicks()-quadrosCache[j].falhouEm<15000u);break;
+      }
+      if(pronto)continue;
+      q=calloc(1,sizeof *q);
+      if(q){q->gen=geracao;q->indice=indice;q->cue=cues[indice];cueEmCurso=indice;}
+      break;
+    }
+  }
   pthread_mutex_unlock(&trava);
   if (q) { pthread_t fio;
     if (pthread_create(&fio,NULL,baixarTile,q)==0) pthread_detach(fio);
     else { pthread_mutex_lock(&trava); if (q->gen==geracao) cueEmCurso=-1; pthread_mutex_unlock(&trava); free(q); }
   }
-  return pronto;
+  return i>=0;
+}
+int seekr_previa(double segundos,GLuint *tex,double *cueSegundos) {
+  SeekrPrevia faixa[SEEKR_PREVIAS];seekr_faixa(segundos,faixa);
+  SeekrPrevia *centro=&faixa[SEEKR_PREVIAS/2];
+  if(!centro->tex)return 0;
+  if(tex)*tex=centro->tex;if(cueSegundos)*cueSegundos=centro->segundos;
+  return 1;
 }
 void seekr_prefetch(double segundos) {
   int fazer=0;

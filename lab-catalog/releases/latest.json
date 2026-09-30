@@ -1,12 +1,12 @@
 {
-  "tag_name": "v1.5.39",
-  "body": "## Legendas embutidas na LG\n- Corrigida a compatibilidade do serviço de extração com as versões de Node do webOS.\n- O IPK inclui o serviço compilado para que o texto embutido possa usar o estilo configurado no app.\n- Inicialização dos plugins separada da extração de legendas.\n",
+  "tag_name": "v1.5.40",
+  "body": "## Nova faixa de prévias Seekr\n- Cinco prévias ao avançar ou retroceder, com o quadro selecionado destacado no centro.\n- Barra fina com o tempo escolhido à esquerda e a duração total à direita.\n- Quadros vizinhos em cache, com prioridade para o selecionado.\n- As prévias dependem da disponibilidade do Seekr para o arquivo.\n",
   "assets": [
     {
-      "name": "com.betternuvio.app_1.5.39_arm.ipk",
-      "size": 52258932,
-      "digest": "sha256:cc0cd5f7e0ddcbe956a2c26345d82d9578f2cc19e47f3aca14efe5850e788410",
-      "browser_download_url": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.39_arm.ipk"
+      "name": "com.betternuvio.app_1.5.40_arm.ipk",
+      "size": 52259640,
+      "digest": "sha256:dc76019eee61675c9e8d9426f81d08b5c5af37631e83e1cd1dc7dc26044103f5",
+      "browser_download_url": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.40_arm.ipk"
     }
   ]
 }

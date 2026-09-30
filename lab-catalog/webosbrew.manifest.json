@@ -1,15 +1,15 @@
 {
   "id": "com.betternuvio.app",
-  "version": "1.5.39",
+  "version": "1.5.40",
   "type": "native",
   "title": "Better Nuvio",
   "appDescription": "Better Nuvio para LG webOS",
   "iconUri": "https://betternuvio.vercel.app/icon.png",
   "sourceUrl": "https://github.com/alenkpedro/better-nuvio",
   "rootRequired": false,
-  "ipkUrl": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.39_arm.ipk",
+  "ipkUrl": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.40_arm.ipk",
   "ipkHash": {
-    "sha256": "cc0cd5f7e0ddcbe956a2c26345d82d9578f2cc19e47f3aca14efe5850e788410"
+    "sha256": "dc76019eee61675c9e8d9426f81d08b5c5af37631e83e1cd1dc7dc26044103f5"
   },
-  "ipkSize": 52258932
+  "ipkSize": 52259640
 }

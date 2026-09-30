@@ -145,3 +145,25 @@ Verificação: o pacote real foi carregado pelo `main` de package.json em Node
 0.12.2 e 8.17.0. Ambos extraíram SRT, ASS e a última de 43 faixas em MKVs reais,
 seguiram redirect/HTTP Range e continuaram disponíveis após erro. O teste
 físico da LG permanece necessário para confirmar a instalação e a transição.
+
+## Faixa de prévias Seekr — IPK 1.5.40 / APK 0.1.31
+
+O seeker mostra cinco quadros vizinhos, com o quadro escolhido centralizado
+e uma borda branca. As prévias das pontas são cortadas pelas bordas da tela.
+A barra fina exibe a posição escolhida à esquerda e a duração total à direita.
+Durante a busca, título e botões de reprodução cedem espaço à faixa; confirmar
+ou navegar para os controles restaura o painel normal.
+
+Os quadros vêm dos cues reais do VTT do Seekr, com prioridade para o central.
+O cache mantém no máximo nove texturas, reaproveita o sprite baixado e ignora
+respostas de um título já fechado. A LG, o Android/Fire TV e o Mac compartilham
+o renderer. As prévias dependem da disponibilidade do Seekr para o arquivo.
+
+Verificação: fixture local com dez quadros diferentes, carregamento central
+primeiro, escala de tempo, reutilização do sprite, limite do cache, início/fim
+sem quadros duplicados e invalidação de resposta atrasada. Capturas OpenGL do
+renderer e do player real confirmaram o layout. O teste integrado também
+cobriu busca pelo controle e retorno aos botões de reprodução. A regressão
+geral do player encontrou uma expectativa antiga do menu de navegação em
+tests/player_regression.c:366; os testes específicos do seeker passaram.
+A navegação nas TVs ainda precisa de validação física.

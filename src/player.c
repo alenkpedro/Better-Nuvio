@@ -71,6 +71,7 @@ static void avisarCascaAberto(int v) { (void)v; }
 #include "subtitle_engine.h"
 #include "intro.h"
 #include "seekr.h"
+#include "seekr_view.h"
 #include "visto.h"     /* fim de episodio/filme para Simkl e conta */
 #include "vistoep.h"   /* o check de "assistido" na lista de episodios (issue #100) */
 #include "pausao.h"
@@ -1904,8 +1905,13 @@ void player_evento(const SDL_Event *e) {
   // estado deixaria o filme pausado no ponto novo — meio comando executado.
   if (scrubbing && (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE)) {
     terminarSalto();
+    previaAte = 0;
     acordar();
     return;
+  }
+
+  if(k==SDLK_UP || k==SDLK_DOWN || k==SDLK_RETURN || k==SDLK_KP_ENTER || k==SDLK_SPACE) {
+    terminarSalto(); previaAte=0;
   }
 
   // CONTROLES EM PE: o foco anda pelos botoes e o OK aperta o botao em foco.
@@ -2470,6 +2476,7 @@ static void ponteiroPlayPause(int a, int b) {
 }
 static void ponteiroBotao(int i, int b) {
   (void)b;
+  previaAte=0;
   if (i < 0 || i >= PLR_NBTNS) return;
   botao = i; if (i < PLR_CC) botaoTransporte = i;
   barraFoco = 0; skipFoco = 0; acordar();
@@ -2973,6 +2980,16 @@ void player_desenhar(Uint32 agora) {
   // player.c nao inclui detail.h — e nao deve incluir so por um numero.
   float cx = bx;
   float cw = bw;
+  int sobreBarra = ponteiroNoPlayer() && ponteiro_y() >= yBarra-14.0f &&
+                   ponteiro_y() <= yBarra+PLR_TRILHO_H_FOCO+14.0f &&
+                   ponteiro_x() >= bx && ponteiro_x() <= bx+bw;
+  int faixaPrevia = !ehCanal() && (scrubbing || sobreBarra ||
+                    (!ponteiroNoPlayer() && (Sint32)(previaAte-agora)>0));
+  if(faixaPrevia) {
+    GfxRect r=seekr_view_trilho(yBarra);bx=r.x;bw=r.w;
+    ac=0; // a busca ocupa o lugar do titulo e dos botoes de transporte
+  }
+
   float frac = ehCanal()
              ? fracCanal()
              : (duracaoSeg > 0.0f ? anim_clamp(posSeg / duracaoSeg, 0.0f, 1.0f) : 0.0f);
@@ -2981,19 +2998,16 @@ void player_desenhar(Uint32 agora) {
   // meta e o titulo, que estao ancorados nela.
   // O trilho cresce para BAIXO a partir da mesma linha de base — subir moveria
   // tambem o titulo, que esta ancorado nela.
-  float hTrilho = barraFoco ? PLR_TRILHO_H_FOCO : PLR_TRILHO_H;
+  float hTrilho = faixaPrevia ? 6.0f : barraFoco ? PLR_TRILHO_H_FOCO : PLR_TRILHO_H;
   GfxRect trilho = { bx, yBarra, bw, hTrilho };
   float fr, fg, fb;
   corFocoPlayer(&fr, &fg, &fb);
-  gfx_cor(trilho, PLR_TRILHO_R, 1, 1, 1, (barraFoco ? 0.45f : 0.30f) * a);
+  if(!faixaPrevia)gfx_cor(trilho, PLR_TRILHO_R, 1, 1, 1, (barraFoco ? 0.45f : 0.30f) * a);
   // A area clicavel da barra e mais alta que o trilho de 4-8 px: um fio desse
   // tamanho nao se acerta com a mao no ar.
   barraPtrX = bx; barraPtrW = bw;
   if (ponteiroNoPlayer() && a > 0.3f)
     ponteiro_alvo(bx, yBarra - 14.0f, bw, hTrilho + 28.0f, ponteiroBarra, ponteiroBuscar, 0, 0);
-  int sobreBarra = ponteiroNoPlayer() && ponteiro_y() >= yBarra - 14.0f &&
-                   ponteiro_y() <= yBarra + hTrilho + 14.0f &&
-                   ponteiro_x() >= bx && ponteiro_x() <= bx+bw;
   float marcadorFrac = sobreBarra && !ehCanal()
                       ? anim_clamp((ponteiro_x()-bx)/bw,0,1) : frac;
   GfxRect andado = { bx, yBarra, bw * marcadorFrac, hTrilho };
@@ -3001,6 +3015,7 @@ void player_desenhar(Uint32 agora) {
   // esta a frente do relogio. Sem dado do pipeline o segmento nao existe —
   // inventar "quase todo carregado" seria pior que a barra simples. No web ele
   // e a MESMA cor do preenchimento a 0.35 (.player-progress-buffered).
+  if(!faixaPrevia) {
   { float bufFrac = (!ehCanal() && duracaoSeg > 0.0f) ? anim_clamp(video_buffer_fim() / duracaoSeg, 0.0f, 1.0f) : 0.0f;
     if (bufFrac > marcadorFrac + 0.004f) {
       GfxRect buf = { bx + bw * marcadorFrac, yBarra, bw * (bufFrac - marcadorFrac), hTrilho };
@@ -3022,6 +3037,8 @@ void player_desenhar(Uint32 agora) {
             .5f,.98f,.98f,.98f,a);
     gfx_cor((GfxRect){mx-5.0f,my-5.0f,10.0f,10.0f},
             .5f,fr,fg,fb,a);
+  }
+
   }
 
   // Filme: somente nome. Serie: nome seguido de T/E e titulo do episodio.
@@ -3130,7 +3147,7 @@ void player_desenhar(Uint32 agora) {
 
   // Os dois tempos ficam abaixo da barra no webOS; o restante tem sinal
   // negativo. Ao vivo so mostra o estado, porque nao ha duracao de arquivo.
-  {
+  if(!faixaPrevia) {
     char dec[24], rest[24];
     if (ehCanal()) {
       snprintf(dec, sizeof dec, "%s", i18n("AO VIVO"));
@@ -3148,74 +3165,14 @@ void player_desenhar(Uint32 agora) {
     }
   }
 
-  // A imagem acompanha o arrasto e permanece por um momento depois do ultimo
-  // toque ou depois de o ponteiro sair do trilho.
-  if ((scrubbing || sobreBarra || (Sint32)(previaAte - agora) > 0) && !ehCanal()) {
-    GLuint imagem=0; double instante=0;
-    if (scrubbing || sobreBarra) {
-      previaSeg = duracaoSeg * marcadorFrac;
-      previaAte = agora + PLR_PREVIA_MS;
+  if(faixaPrevia) {
+    if(scrubbing || sobreBarra) {
+      previaSeg=duracaoSeg*marcadorFrac;
+      previaAte=agora+PLR_PREVIA_MS;
     }
-    float alvoFrac=duracaoSeg > 0.0f
-                   ? anim_clamp(previaSeg / duracaoSeg, 0.0f, 1.0f) : 0.0f;
-    int previaReal=seekr_previa(duracaoSeg*alvoFrac,&imagem,&instante);
-#ifdef __APPLE__
-    // O Mac nao tem o pipeline de video do webOS. So ao interagir com a barra,
-    // usar a duracao do catalogo para tentar a miniatura real do Seekr. Se ela
-    // ainda nao chegou (ou nao existe), mostrar a arte do titulo como amostra
-    // VISUAL do layout; nunca confundi-la com um frame obtido do Seekr.
-    const char *artePrevia=NULL;
-    if (!comVideo && c && duracaoDeMeta(c->meta)>1.0f) {
-      seekr_duracao(duracaoSeg);
-      if (!previaReal) previaReal=seekr_previa(duracaoSeg*alvoFrac,&imagem,&instante);
-    }
-    if (!previaReal && !comVideo && c && c->backdrop[0]) {
-      artePrevia=artehero_url(c);
-      imagem=tex_obter_hero(artePrevia);
-      instante=duracaoSeg*alvoFrac;
-    }
-#endif
-    if (previaReal || imagem) {
-      // Preview compacto, com moldura fina, ponta no instante escolhido e horario
-      // separado da barra. Perto das bordas o cartao recua, mas a ponta segue
-      // o marcador para nao fingir que a imagem pertence a outro instante.
-      const float w=384.0f, h=216.0f;
-      float alvoX=bx+bw*alvoFrac;
-      float px=anim_clamp(alvoX-w*.5f,PLR_MARGEM,NV_TELA_W-PLR_MARGEM-w);
-      float py=yBarra-h-78.0f;
-      float pontaX=anim_clamp(alvoX,px+24.0f,px+w-24.0f);
-      gfx_cor((GfxRect){px-8,py-8,w+16,h+16},0.045f,0,0,0,0.52f*a);
-      gfx_cor((GfxRect){px-2,py-2,w+4,h+4},0.045f,
-              0.78f,0.81f,0.84f,0.68f*a);
-      gfx_tex_aspect_atual =
-#ifdef __APPLE__
-          artePrevia ? tex_aspecto(artePrevia) :
-#endif
-          0.0f;
-      gfx_rect((GfxRect){px,py,w,h},imagem,GFX_CARD,
-               0,0,0,0.045f,1,1,1,a);
-      gfx_tex_aspect_atual=0.0f;
-#ifdef __APPLE__
-      if (!previaReal) {
-        gfx_cor((GfxRect){px+14,py+14,258,34},0.25f,0,0,0,0.72f*a);
-        TxtLinha aviso=txt_linha(TXT_PG_FIM,"Prévia visual no Mac",240,241,243,255);
-        txt_desenhar_alpha(aviso,px+25,py+19,a);
-      }
-#endif
-      for (int linha=0; linha<15; linha++) {
-        float largura=26.0f-1.6f*linha;
-        gfx_cor((GfxRect){pontaX-largura*.5f,py+h+linha,largura,1.5f},
-                0,0.65f,0.68f,0.71f,0.70f*a);
-      }
-      for (int linha=0; linha<12; linha++) {
-        float largura=21.0f-1.55f*linha;
-        gfx_cor((GfxRect){pontaX-largura*.5f,py+h+linha,largura,1.5f},
-                0,0.08f,0.09f,0.10f,0.95f*a);
-      }
-      char tempo[24]; fmtTempo(tempo,sizeof tempo,instante,0);
-      TxtLinha marca=txt_linha(TXT_PLR_CORPO,tempo,248,249,251,255);
-      txt_desenhar_alpha(marca,pontaX-marca.w*.5f,py+h+32.0f,a);
-    }
+    SeekrPrevia quadros[SEEKR_PREVIAS];
+    seekr_faixa(previaSeg,quadros);
+    seekr_view_desenhar(quadros,previaSeg,duracaoSeg,yBarra,a,fr,fg,fb);
   }
 
   // Selos de formato no alto a direita. Vem do FLUXO, nao de constante: os
@@ -3317,5 +3274,5 @@ void player_desenhar(Uint32 agora) {
   // botao nenhum a vista. Visto na C9 em 22/09 (S1E2 de Imperfect Women: o OK
   // que devia pausar deu "seek para 149s", o fim da abertura). A posicao ja
   // acompanha `anim` (sobe acima dos controles), era so a chamada que faltava.
-  desenharAcoesEpisodio();
+  if(!faixaPrevia)desenharAcoesEpisodio();
 }

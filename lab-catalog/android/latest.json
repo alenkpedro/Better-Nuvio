@@ -1,12 +1,12 @@
 {
-  "tag_name": "v0.1.30",
-  "body": "## Faixas de legenda\n- Ampliada a lista de faixas embutidas para arquivos com mais de 32 legendas.\n- Mantidos os ajustes de estilo compartilhados com as legendas externas.\n",
+  "tag_name": "v0.1.31",
+  "body": "## Nova faixa de prévias Seekr\n- Cinco prévias ao avançar ou retroceder, com o quadro selecionado destacado no centro.\n- Barra fina com o tempo escolhido à esquerda e a duração total à direita.\n- Quadros vizinhos em cache, com prioridade para o selecionado.\n- As prévias dependem da disponibilidade do Seekr para o arquivo.\n",
   "assets": [
     {
-      "name": "better-nuvio-android-tv-0.1.30-firetv-4k-max-2-debug.apk",
-      "size": 39031164,
-      "digest": "sha256:8b47a6f4a59e8968147c616dc16fd7be79b45a92c7f14e7b0f95f96124361cc1",
-      "browser_download_url": "https://betternuvio.vercel.app/better-nuvio-android-tv-0.1.30-firetv-4k-max-2-debug.apk"
+      "name": "better-nuvio-android-tv-0.1.31-firetv-4k-max-2-debug.apk",
+      "size": 39033160,
+      "digest": "sha256:78ed3a3b4526fd788330e4adef360169b2b5343753747f2b17ed7b09889b4907",
+      "browser_download_url": "https://betternuvio.vercel.app/better-nuvio-android-tv-0.1.31-firetv-4k-max-2-debug.apk"
     }
   ]
 }
