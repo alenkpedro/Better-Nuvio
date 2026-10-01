@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111013">
+  <meta name="description" content="Instale o Better Nuvio na LG webOS: ative o Developer Mode, conecte o webOS Dev Manager e adicione nosso catálogo ao Homebrew Channel.">
+  <title>Como instalar na LG webOS — Better Nuvio</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #111013; color: #f4f1ec; --gold: #d9b566; --muted: #bfbab2; }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+    body { margin: 0; background: radial-gradient(circle at 80% -10%, #514028 0, transparent 36%), #111013; }
+    main { width: min(1060px, calc(100% - 40px)); margin: 0 auto; padding: 36px 0 64px; }
+    a { color: var(--gold); text-underline-offset: .2em; }
+    a:focus-visible, button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid #f3d691; outline-offset: 4px; }
+    .back { display: inline-block; margin-bottom: 42px; color: var(--muted); }
+    .eyebrow { color: var(--gold); font-size: .8rem; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { margin: 12px 0 18px; max-width: 800px; font-size: clamp(2.3rem, 6vw, 4.3rem); line-height: 1.06; letter-spacing: -.04em; }
+    h2 { margin: 0 0 16px; font-size: 1.35rem; letter-spacing: -.015em; }
+    h3 { margin: 0 0 12px; font-size: 1.02rem; }
+    p, li, dd { color: #d2cdd0; line-height: 1.65; }
+    p { margin: 0 0 16px; }
+    .intro { max-width: 730px; font-size: 1.15rem; color: var(--muted); }
+    .requirements { background: #1c1b1e; border: 1px solid #343238; border-radius: 20px; padding: 26px 28px; margin: 28px 0; }
+    ul, ol { margin: 0; padding-left: 1.3em; }
+    li + li { margin-top: 12px; }
+    .requirements ul { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 30px; }
+    .requirements li { margin: 0; }
+    .requirements p { margin: 18px 0 0; }
+    .guide { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 26px; align-items: start; }
+    .toc { position: sticky; top: 24px; padding: 18px 0; }
+    .toc ol { list-style: none; padding: 0; }
+    .toc a { display: block; color: var(--muted); padding: 7px 0; font-size: .95rem; text-decoration: none; }
+    .toc a:hover { color: var(--gold); }
+    .toc li + li { margin-top: 3px; }
+    .steps { display: grid; gap: 18px; min-width: 0; }
+    .step, .help, .sources { background: #1c1b1e; border: 1px solid #343238; border-radius: 20px; padding: 28px; min-width: 0; }
+    .step-head { display: flex; gap: 14px; align-items: center; margin-bottom: 18px; }
+    .step-head h2 { margin: 0; }
+    .number { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border: 1px solid #755f36; border-radius: 50%; color: var(--gold); font-weight: 750; }
+    .where { color: var(--gold); margin-bottom: 14px; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .step > p:last-child { margin-bottom: 0; }
+    .tip { margin-top: 20px; padding-left: 16px; border-left: 2px solid #755f36; font-size: .95rem; }
+    .button { display: inline-flex; align-items: center; justify-content: center; padding: 12px 18px; border: 1px solid #5b5348; border-radius: 12px; color: #f4f1ec; font: inherit; font-size: .95rem; font-weight: 650; text-decoration: none; background: #262328; cursor: pointer; }
+    .button:hover { border-color: var(--gold); }
+    .download { margin: 18px 0 0; }
+    dl { display: grid; grid-template-columns: 130px minmax(0, 1fr); margin: 18px 0 0; border: 1px solid #343238; border-radius: 12px; overflow: hidden; }
+    dt, dd { margin: 0; padding: 10px 14px; border-bottom: 1px solid #343238; overflow-wrap: anywhere; }
+    dt { font-size: .9rem; background: #242227; color: var(--muted); }
+    dd { font-size: .95rem; }
+    dt:last-of-type, dd:last-of-type { border-bottom: 0; }
+    code { font-size: .92em; overflow-wrap: anywhere; }
+    .repo-box { margin: 20px 0; padding: 18px; background: #111013; border: 1px solid #755f36; border-radius: 14px; }
+    .repo-box label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 10px; }
+    .repo-controls { display: flex; gap: 10px; align-items: center; }
+    .repo-controls textarea { width: 100%; min-width: 0; resize: none; overflow-wrap: anywhere; border: 1px solid #48424b; border-radius: 8px; background: #1c1b1e; padding: 12px; color: #f4f1ec; font: .9rem/1.6 ui-monospace, monospace; }
+    .repo-controls .button { flex-shrink: 0; }
+    .copy-status { min-height: 1.6em; margin: 10px 0 0; font-size: .85rem; color: var(--gold); }
+    .route { margin-bottom: 18px; padding: 14px 16px; background: #242227; border-radius: 10px; color: #f4f1ec; font-size: .95rem; }
+    .help details + details { border-top: 1px solid #343238; margin-top: 18px; padding-top: 18px; }
+    summary { cursor: pointer; font-weight: 650; line-height: 1.5; }
+    details p { margin: 12px 0 0; font-size: .95rem; }
+    .sources { background: transparent; }
+    .sources p { font-size: .9rem; margin-bottom: 0; }
+    .sources ul { margin: 14px 0; }
+    .sources li { font-size: .9rem; }
+    footer { margin: 36px 0 0; color: var(--muted); font-size: .85rem; line-height: 1.6; }
+    @media (max-width: 760px) {
+      .guide { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+      .toc { position: static; padding: 6px 0 18px; }
+      .toc ol { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+      .toc li + li { margin: 0; }
+      .requirements ul { grid-template-columns: 1fr; }
+      .step, .help, .sources, .requirements { padding: 22px; }
+    }
+    @media (max-width: 430px) {
+      .repo-controls { flex-direction: column; align-items: stretch; }
+      .repo-controls textarea { font-size: .85rem; padding: 12px 8px; }
+      dl { grid-template-columns: 100px minmax(0, 1fr); }
+      dt, dd { padding: 9px 10px; }
+      dt { font-size: .8rem; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/">← Better Nuvio · downloads e atualizações</a>
+    <header>
+      <div class="eyebrow">Guia de instalação · LG webOS</div>
+      <h1>Better Nuvio na sua LG, passo a passo.</h1>
+      <p class="intro">Ative o modo Developer, instale o Homebrew Channel e adicione nosso catálogo. Depois, você poderá instalar e atualizar o Better Nuvio pela TV.</p>
+    </header>
+    <section class="requirements" aria-labelledby="before-title">
+      <h2 id="before-title">Antes de começar</h2>
+      <ul>
+        <li>Uma TV LG com webOS e acesso à internet.</li>
+        <li>Um computador com Windows, macOS ou Linux.</li>
+        <li>TV e computador conectados à mesma rede local.</li>
+        <li>Uma conta com acesso ao <a href="https://webostv.developer.lge.com/">portal LG Developer</a>.</li>
+      </ul>
+      <p>O Better Nuvio funciona pelo Developer Mode, sem precisar de root. Já tem o Homebrew Channel? <a href="#catalogo">Vá direto para adicionar o catálogo.</a></p>
+    </section>
+    <div class="guide">
+      <nav class="toc" aria-label="Etapas de instalação">
+        <h3>Neste guia</h3>
+        <ol>
+          <li><a href="#developer">1. Modo Developer</a></li>
+          <li><a href="#computador">2. Conectar o computador</a></li>
+          <li><a href="#homebrew">3. Homebrew Channel</a></li>
+          <li><a href="#catalogo">4. Adicionar o catálogo</a></li>
+          <li><a href="#app">5. Instalar o app</a></li>
+          <li><a href="#sessao">6. Manter a sessão ativa</a></li>
+          <li><a href="#ajuda">Dúvidas comuns</a></li>
+        </ol>
+      </nav>
+      <div class="steps">
+        <section class="step" id="developer" aria-labelledby="developer-title">
+          <div class="where">Na TV</div>
+          <div class="step-head"><span class="number" aria-hidden="true">1</span><h2 id="developer-title">Ative o modo Developer</h2></div>
+          <ol>
+            <li>Acesse o <a href="https://webostv.developer.lge.com/">portal LG Developer</a> no computador e crie uma conta ou entre com sua conta LG. Conclua o cadastro solicitado pelo portal.</li>
+            <li>Na loja de aplicativos da TV (<strong>Apps / LG Content Store</strong>), busque <strong>Developer Mode</strong> e instale o app da LG.</li>
+            <li>Abra o Developer Mode e entre com a conta usada no portal.</li>
+            <li>Ative <strong>Dev Mode Status</strong>. A TV reiniciará.</li>
+            <li>Abra o Developer Mode novamente, confira se o status está <strong>ON</strong> e ative <strong>Key Server</strong>.</li>
+            <li>Anote a <strong>Passphrase</strong> mostrada no app. Encontre também o <strong>endereço IP da TV</strong> nos detalhes da conexão de rede, nas configurações da TV.</li>
+          </ol>
+          <p class="tip">Deixe o Developer Mode aberto durante a primeira conexão com o computador. Digite a Passphrase respeitando maiúsculas e minúsculas.</p>
+        </section>
+        <section class="step" id="computador" aria-labelledby="computer-title">
+          <div class="where">No computador</div>
+          <div class="step-head"><span class="number" aria-hidden="true">2</span><h2 id="computer-title">Conecte o webOS Dev Manager</h2></div>
+          <ol>
+            <li>Baixe e instale o <a href="https://github.com/webosbrew/dev-manager-desktop/releases/latest">webOS Dev Manager</a> para seu sistema. No GitHub, os instaladores ficam em <strong>Assets</strong>: <code>.dmg</code> para Mac, <code>.msi</code> para Windows ou o pacote correspondente ao seu Linux.</li>
+            <li>Abra o programa e adicione uma TV pelo assistente de novo dispositivo. Selecione <strong>Use Developer Mode</strong> e avance.</li>
+            <li>Preencha o nome da TV, seu endereço IP e a Passphrase. O assistente configura usuário, porta e autenticação.</li>
+            <li>Conclua em <strong>Finish</strong>. Aguarde a conexão e confira se a lista de aplicativos da TV aparece.</li>
+          </ol>
+          <dl aria-label="Dados de conexão pelo Developer Mode">
+            <dt>Nome</dt><dd>Um nome para identificar sua TV, como <code>tv-sala</code>.</dd>
+            <dt>Address</dt><dd>O endereço IP local da sua TV.</dd>
+            <dt>Username</dt><dd><code>prisoner</code></dd>
+            <dt>Porta</dt><dd><code>9922</code></dd>
+            <dt>Autenticação</dt><dd><strong>Dev Mode</strong>, com a Passphrase exibida na TV.</dd>
+          </dl>
+          <p class="download"><a class="button" href="https://github.com/webosbrew/dev-manager-desktop/releases/latest">Baixar webOS Dev Manager ↗</a></p>
+        </section>
+        <section class="step" id="homebrew" aria-labelledby="homebrew-title">
+          <div class="where">No computador → na TV</div>
+          <div class="step-head"><span class="number" aria-hidden="true">3</span><h2 id="homebrew-title">Instale o Homebrew Channel</h2></div>
+          <ol>
+            <li>Abra a <a href="https://github.com/webosbrew/webos-homebrew-channel/releases/latest">última versão do Homebrew Channel</a> e, em <strong>Assets</strong>, baixe o arquivo que termina em <code>.ipk</code>.</li>
+            <li>No webOS Dev Manager, selecione sua TV. Na tela de aplicativos, clique em <strong>Install</strong> e escolha o IPK do Homebrew Channel que acabou de baixar.</li>
+            <li>Aguarde a instalação terminar. Na tela inicial da TV, abra o <strong>Homebrew Channel</strong>.</li>
+          </ol>
+          <p class="download"><a class="button" href="https://github.com/webosbrew/webos-homebrew-channel/releases/latest">Baixar Homebrew Channel ↗</a></p>
+        </section>
+        <section class="step" id="catalogo" aria-labelledby="catalog-title">
+          <div class="where">No Homebrew Channel, na TV</div>
+          <div class="step-head"><span class="number" aria-hidden="true">4</span><h2 id="catalog-title">Adicione o catálogo Better Nuvio</h2></div>
+          <p class="route"><strong>Settings</strong> → <strong>Repositories</strong> → <strong>Add repository</strong></p>
+          <p>Abra as configurações do Homebrew Channel e adicione este endereço completo:</p>
+          <div class="repo-box">
+            <label for="repo-url">Endereço do catálogo</label>
+            <div class="repo-controls">
+              <textarea id="repo-url" rows="2" readonly spellcheck="false" autocomplete="off">https://betternuvio.vercel.app/apps.json</textarea>
+              <button class="button" id="copy-repo" type="button">Copiar URL</button>
+            </div>
+            <p class="copy-status" id="copy-status" role="status" aria-live="polite"></p>
+          </div>
+          <ol>
+            <li>Digite o endereço no campo de URL e confirme em <strong>Add repository</strong>.</li>
+            <li>Volte à lista de aplicativos e aguarde o catálogo carregar. Se necessário, feche e abra o Homebrew Channel.</li>
+          </ol>
+          <p class="tip">Use o endereço que termina em <strong>/apps.json</strong>. O link de download do IPK é usado para instalação direta; o campo de repositório recebe o catálogo.</p>
+        </section>
+        <section class="step" id="app" aria-labelledby="app-title">
+          <div class="where">Na TV</div>
+          <div class="step-head"><span class="number" aria-hidden="true">5</span><h2 id="app-title">Instale e abra o Better Nuvio</h2></div>
+          <ol>
+            <li>Na lista de apps do Homebrew Channel, encontre <strong>Better Nuvio</strong> e abra a página do app.</li>
+            <li>Selecione <strong>Install / Instalar</strong> e aguarde a conclusão.</li>
+            <li>Abra o Better Nuvio pela tela inicial da TV e entre na sua conta Nuvio.</li>
+          </ol>
+          <p class="tip">Para atualizar depois, abra a página do Better Nuvio no Homebrew Channel e selecione <strong>Update / Atualizar</strong> quando houver uma versão nova.</p>
+        </section>
+        <section class="step" id="sessao" aria-labelledby="session-title">
+          <div class="where">Na TV, periodicamente</div>
+          <div class="step-head"><span class="number" aria-hidden="true">6</span><h2 id="session-title">Mantenha a sessão Developer ativa</h2></div>
+          <p>No app Developer Mode, acompanhe <strong>Remain Session</strong>. Com a TV conectada à internet, use <strong>EXTEND</strong> antes de o contador chegar a zero.</p>
+          <p>Se a sessão expirar e o modo Developer for desativado, a LG remove os apps instalados por esse modo. Nesse caso, ative-o novamente e reinstale o Homebrew Channel e o Better Nuvio.</p>
+        </section>
+        <section class="help" id="ajuda" aria-labelledby="help-title">
+          <h2 id="help-title">Se algo não funcionar</h2>
+          <details>
+            <summary>O computador não conecta à TV</summary>
+            <p>Confira o IP atual da TV, a mesma rede local nos dois aparelhos, <strong>Dev Mode Status ON</strong> e <strong>Key Server ON</strong>. Confira também a Passphrase. Redes de convidados e VPNs podem impedir a comunicação local.</p>
+          </details>
+          <details>
+            <summary>O Better Nuvio não aparece no Homebrew Channel</summary>
+            <p>Confira o endereço <code>https://betternuvio.vercel.app/apps.json</code> na lista de repositórios. Abra <a href="/apps.json">o catálogo</a> no computador para confirmar que a conexão funciona e reabra o Homebrew Channel na TV.</p>
+          </details>
+          <details>
+            <summary>Quero instalar o IPK direto pelo computador</summary>
+            <p>Com a TV já conectada ao webOS Dev Manager, <a id="direct-download" href="/com.betternuvio.app_1.5.40_arm.ipk">baixe o IPK atual do Better Nuvio</a>. Clique em <strong>Install</strong> no programa e escolha esse arquivo. Para acompanhar as atualizações pelo Homebrew Channel, adicione também nosso catálogo.</p>
+          </details>
+          <details>
+            <summary>Minha TV já tem root e Homebrew Channel</summary>
+            <p>Comece pela <a href="#catalogo">etapa 4, adicionar o catálogo</a>. A renovação da sessão se aplica à instalação pelo Developer Mode.</p>
+          </details>
+        </section>
+        <section class="sources" aria-labelledby="sources-title">
+          <h2 id="sources-title">Documentação de referência</h2>
+          <p>Os nomes dos menus podem variar conforme a versão da TV ou dos programas. Consulte as instruções dos projetos:</p>
+          <ul>
+            <li><a href="https://webostv.developer.lge.com/develop/getting-started/developer-mode-app">LG: Developer Mode e renovação da sessão</a></li>
+            <li><a href="https://github.com/webosbrew/dev-manager-desktop">webOS Dev Manager</a></li>
+            <li><a href="https://github.com/webosbrew/webos-homebrew-channel">Homebrew Channel e repositórios</a></li>
+          </ul>
+          <p>Guia revisado em 1º de outubro de 2026.</p>
+        </section>
+      </div>
+    </div>
+    <footer>Este guia é para LG webOS. Para Android TV / Fire TV, use o <a href="/">APK disponível na página de downloads</a>.</footer>
+  </main>
+  <script>
+    (function () {
+      var input = document.getElementById('repo-url');
+      var status = document.getElementById('copy-status');
+      function selectUrl() { input.focus(); input.select(); input.setSelectionRange(0, input.value.length); }
+      function fallback() {
+        selectUrl();
+        var copied = false;
+        try { copied = document.execCommand('copy'); } catch (error) {}
+        status.textContent = copied ? 'URL copiada. Digite esse endereço no Homebrew Channel da TV.' : 'URL selecionada. Use o comando Copiar do seu dispositivo.';
+      }
+      document.getElementById('copy-repo').addEventListener('click', function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(input.value).then(function () {
+            status.textContent = 'URL copiada. Digite esse endereço no Homebrew Channel da TV.';
+          }, fallback);
+        } else { fallback(); }
+      });
+      fetch('/releases/latest.json', {cache: 'no-store'})
+        .then(function (response) { if (!response.ok) throw new Error('release'); return response.json(); })
+        .then(function (release) {
+          var assets = release.assets || [];
+          for (var i = 0; i < assets.length; i++) {
+            if (assets[i].name && /_arm\.ipk$/.test(assets[i].name) && /^https:\/\/betternuvio\.vercel\.app\//.test(assets[i].browser_download_url || '')) {
+              document.getElementById('direct-download').href = assets[i].browser_download_url;
+              break;
+            }
+          }
+        }).catch(function () {});
+    }());
+  </script>
+</body>
+</html>

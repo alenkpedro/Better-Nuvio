@@ -10,6 +10,8 @@ Adicione este catálogo ao Homebrew Channel:
 https://betternuvio.vercel.app/apps.json
 ```
 
+Para a primeira instalação, siga o [guia completo para LG webOS](https://betternuvio.vercel.app/instalar.html): Developer Mode, conexão com o computador, Homebrew Channel e catálogo do Better Nuvio.
+
 O [site de atualizações](https://betternuvio.vercel.app/) mostra as notas e o pacote IPK atual. Os metadados do catálogo ficam em `lab-catalog/`.
 
 ## Publicar uma atualização
