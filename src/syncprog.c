@@ -1,339 +1,140 @@
 #include "syncprog.h"
-#include "vistoep.h"
 #include "progresso.h"
-#include "catalogo.h"
 #include "sessao.h"
 #include "perfis.h"
 #include "dados.h"
+#include "catalogo.h"
 #include "js.h"
 #include "jsw.h"
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <math.h>
 
-#define SP_MAX PROG_MAX
-#define PREFIXO_EPISODIO "__nuvio_episode__:"
-// O web nao sincroniza titulo com menos de um minuto (MIN_PROGRESS_SYNC_DURATION_MS).
-#define DUR_MINIMA_SEG 60.0
-
-static ProgRegistro caixa[SP_MAX];
-static int nCaixa;
-
-static int ok2xx(const char *r, int st) { return r && st >= 200 && st < 300; }
-
-
-// updated_at ganha de last_watched, como em rowFreshness do web. Numero pode
-// vir em segundos ou em ms (mapProgressRow trata os dois); texto e ISO.
-static long long lerInstanteMs(const char *p, const char *f) {
-  static const char *chaves[] = { "updated_at", "last_watched", "last_watched_at" };
-  unsigned i;
-  for (i = 0; i < sizeof chaves / sizeof *chaves; i++) {
-    char txt[64];
-    double v;
-    // Texto primeiro: js_num aceita valor entre aspas e leria "2026-09-04T..."
-    // como 2026. Uma data ISO tem '-' ou 'T'; numero entre aspas nao.
-    if (js_texto(p, f, chaves[i], txt, sizeof txt) && txt[0]) {
-      if (strchr(txt, '-') || strchr(txt, 'T')) { long long ms = js_ms_iso(txt); if (ms > 0) return ms; continue; }
-      v = strtod(txt, NULL);
-    } else {
-      v = js_num(p, f, chaves[i], -1.0);
-    }
-    if (v > 0) return v > 1000000000000.0 ? (long long)v : (long long)(v * 1000.0);
+/* Cloud adapter rebuilt from Nuvio's portable RPC contract.
+ * Every request captures its profile; acknowledgements capture row revisions. */
+static pthread_mutex_t mailboxMu=PTHREAD_MUTEX_INITIALIZER;
+static ProgRegistro *mailbox;
+static int mailboxCount, mailboxProfile, mailboxChanged;
+static unsigned epoch;
+static int success(const char *body,int status){return body && status>=200 && status<300;}
+static long long freshness(const char *p,const char *f) {
+  const char *keys[]={"updated_at","last_watched","lastWatched","updatedAt"};
+  for(unsigned i=0;i<sizeof keys/sizeof *keys;i++) {
+    char text[80];double v;
+    if(js_texto(p,f,keys[i],text,sizeof text)) {
+      if(strchr(text,'T') || strchr(text,'-')) {long long t=js_ms_iso(text);if(t>0)return t;continue;}
+      v=strtod(text,NULL);
+    } else v=js_num(p,f,keys[i],-1);
+    if(isfinite(v) && v>0)return (long long)(v>1000000000000.0?v:v*1000);
+  }return 0;
+}
+static void text2(const char *p,const char *f,const char *a,const char *b,char *dst,unsigned cap) {
+  if(!js_texto(p,f,a,dst,cap) || !*dst)js_texto(p,f,b,dst,cap);
+}
+static int parseRow(const char *p,int profile,ProgRegistro *r) {
+  const char *f=js_fim(p);memset(r,0,sizeof *r);r->perfil=profile;r->percentual=-1;
+  int rowProfile=(int)js_num(p,f,"profile_id",profile);if(rowProfile!=profile)return 0;
+  char id[128];text2(p,f,"content_id","contentId",id,sizeof id);if(!*id)return 0;
+  int st=0,ep=0;prog_content_id(r->contentId,sizeof r->contentId,id,&st,&ep);
+  r->temporada=(int)js_num(p,f,"season",js_num(p,f,"season_number",st));
+  r->episodio=(int)js_num(p,f,"episode",js_num(p,f,"episode_number",ep));
+  text2(p,f,"video_id","videoId",r->videoId,sizeof r->videoId);
+  if(r->episodio<=0) {
+    int s=0,e=0;char parent[64];
+    if(sscanf(r->videoId,"__nuvio_episode__:%d:%d",&s,&e)==2 && s>=0 && e>0){r->temporada=s;r->episodio=e;}
+    else {prog_content_id(parent,sizeof parent,r->videoId,&s,&e);if(e>0 && !strcmp(parent,r->contentId)){r->temporada=s;r->episodio=e;}}
   }
-  return 0;
+  if(r->episodio<=0)r->temporada=r->episodio=0;
+  text2(p,f,"content_type","contentType",r->tipo,sizeof r->tipo);
+  if(!r->tipo[0])snprintf(r->tipo,sizeof r->tipo,"%s",r->episodio>0?"series":"movie");
+  double pm=js_num(p,f,"position_ms",js_num(p,f,"positionMs",-1));
+  double dm=js_num(p,f,"duration_ms",js_num(p,f,"durationMs",-1));
+  double lp=js_num(p,f,"position",0),ld=js_num(p,f,"duration",0);
+  int legacyMillis=pm<0 && dm<0 && ld>28800;
+  if(pm<0)pm=lp*(legacyMillis||lp>28800?1:1000);
+  if(dm<0)dm=ld*(legacyMillis||ld>28800?1:1000);
+  if(dm>86400000 && dm/1000<=86400000){pm/=1000;dm/=1000;}
+  if(!isfinite(pm)||!isfinite(dm)||pm<0||dm<0)return 0;
+  r->posSeg=pm/1000;r->durSeg=dm/1000;
+  r->percentual=js_num(p,f,"progress_percent",js_num(p,f,"progressPercent",-1));
+  char source[48];js_texto(p,f,"source",source,sizeof source);if(!strcmp(source,"trakt_history"))r->percentual=100;
+  if(r->posSeg<=0 && r->percentual<=0)return 0;
+  r->lastWatchedMs=freshness(p,f);
+  text2(p,f,"title","name",r->titulo,sizeof r->titulo);
+  text2(p,f,"episode_title","episodeTitle",r->nomeEpisodio,sizeof r->nomeEpisodio);
+  js_texto(p,f,"poster",r->poster,sizeof r->poster);text2(p,f,"backdrop","background",r->backdrop,sizeof r->backdrop);js_texto(p,f,"logo",r->logo,sizeof r->logo);
+  prog_chave(r->chave,sizeof r->chave,r->contentId,r->temporada,r->episodio);
+  return 1;
 }
-
-static int lerInteiroAlternativo(const char *p, const char *f,
-                                const char *principal, const char *alternativo) {
-  int v = (int)js_num(p, f, principal, -1);
-  return v >= 0 ? v : (int)js_num(p, f, alternativo, -1);
-}
-
 int syncprog_puxar(void) {
-  Jsw w;
-  char *r;
-  int st = 0, k = 0;
-  const char *p;
-
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_obj_fim(&w);
-  r = sessao_rpc("sync_pull_watch_progress", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
-  if (!ok2xx(r, st)) { free(r); return -1; }
-
-  for (p = js_raiz_array(r); p && k < SP_MAX; p = js_prox(js_fim(p))) {
-    const char *f = js_fim(p);
-    ProgRegistro *d = &caixa[k];
-    double pos, dur, legadoDur;
-    char id[40];
-    if ((!js_texto(p, f, "content_id", id, sizeof id) || !id[0]) &&
-        (!js_texto(p, f, "contentId", id, sizeof id) || !id[0])) continue;
-    // O Nuvio aceita position_ms/duration_ms e position/duration. Os campos
-    // sem sufixo ja vieram em ms e, em linhas historicas, tambem em segundos.
-    pos = js_num(p, f, "position_ms", -1.0);
-    dur = js_num(p, f, "duration_ms", -1.0);
-    legadoDur = js_num(p, f, "duration", 0);
-    if (pos < 0) {
-      pos = js_num(p, f, "position", 0);
-      // O Nuvio tambem le linhas historicas em segundos. Inferir a unidade
-      // pelo par inteiro, para nao transformar 30 s em 30 ms.
-      if (dur < 0 && legadoDur > 0 && legadoDur <= 8.0 * 60.0 * 60.0)
-        pos *= 1000.0;
-    }
-    if (dur < 0) {
-      dur = legadoDur;
-      if (dur > 0 && dur <= 8.0 * 60.0 * 60.0) dur *= 1000.0;
-    }
-    pos /= 1000.0;
-    dur /= 1000.0;
-    memset(d, 0, sizeof *d);
-    // content_id pode vir composto de um cliente antigo ("tt123:4:9"): corta,
-    // e aproveita temporada/episodio de la se as colunas nao vierem.
-    { int tI = 0, eI = 0;
-      prog_content_id(d->contentId, sizeof d->contentId, id, &tI, &eI);
-      d->temporada = lerInteiroAlternativo(p, f, "season", "season_number");
-      d->episodio  = lerInteiroAlternativo(p, f, "episode", "episode_number");
-      { char video[72] = "", idVideo[40] = "";
-        int tV = 0, eV = 0;
-        js_texto(p, f, "video_id", video, sizeof video);
-        prog_content_id(idVideo, sizeof idVideo, video, &tV, &eV);
-        // Alguns clientes salvam o card do arco como content_id (tmdb:...),
-        // mas o episodio reproduzido usa a serie principal no video_id.
-        // Este ultimo e a identidade que os addons aceitam para /meta e /stream.
-        if (tV >= 0 && eV > 0 && !strncmp(idVideo, "tt", 2) &&
-            strlen(idVideo) > 6 &&
-            strspn(idVideo + 2, "0123456789") == strlen(idVideo + 2) &&
-            strcmp(idVideo, d->contentId)) {
-          snprintf(d->contentId, sizeof d->contentId, "%s", idVideo);
-          d->temporada = tV; d->episodio = eV;
-        } else if (d->episodio <= 0) {
-          if (sscanf(video, "__nuvio_episode__:%d:%d", &tV, &eV) == 2 && eV > 0) {
-            d->temporada = tV; d->episodio = eV;
-          } else { d->temporada = tI; d->episodio = eI; }
-        }
-      } }
-    if (d->episodio <= 0) { d->temporada = 0; d->episodio = 0; }
-    if (d->temporada < 0) d->temporada = 0;
-    // O Nuvio pode guardar um episodio pausado com posicao, mas sem duracao.
-    // Nao sabemos a porcentagem ate chegar o runtime do metadado; a posicao
-    // absoluta ainda permite retomar exatamente onde a pessoa parou.
-    if (dur <= 1.0 && !(d->episodio > 0 && pos >= 60.0 && pos < 4.0 * 3600.0))
-      continue;
-    snprintf(d->tipo, sizeof d->tipo, "%s", d->episodio > 0 ? "series" : "movie");
-    // A chave e SEMPRE recalculada, nunca copiada do servidor: uma linha antiga
-    // escrita por este mesmo app trazia "tt123:4:9" em progress_key, e adotar
-    // isso perpetuaria a duplicata que estamos consertando.
-    prog_chave(d->chave, sizeof d->chave, d->contentId, d->temporada, d->episodio);
-    d->posSeg = pos;
-    d->durSeg = dur;
-    d->lastWatchedMs = lerInstanteMs(p, f);
-    d->pendente = 0;
-    k++;
+  int profile=perfis_ativo(),status=0,n=0;unsigned started;
+  pthread_mutex_lock(&mailboxMu);started=epoch;pthread_mutex_unlock(&mailboxMu);
+  Jsw w;jsw_iniciar(&w);jsw_obj_ini(&w);jsw_ci(&w,"p_profile_id",profile);jsw_obj_fim(&w);
+  char *body=sessao_rpc("sync_pull_watch_progress",jsw_texto_final(&w),&status);jsw_livre(&w);
+  if(!success(body,status)){free(body);return -1;}
+  const char *first=js_raiz_array(body);
+  const char *check=body;while(*check==' '||*check=='\r'||*check=='\n'||*check=='\t')check++;
+  if(*check!='['){free(body);return -1;}
+  ProgRegistro *snapshot=calloc(PROG_MAX,sizeof *snapshot);if(!snapshot){free(body);return -1;}
+  for(const char *p=first;p && n<PROG_MAX;p=js_prox(js_fim(p))) {
+    ProgRegistro r;if(!parseRow(p,profile,&r))continue;
+    int dup=-1;for(int i=0;i<n;i++)if(!strcmp(snapshot[i].chave,r.chave)){dup=i;break;}
+    if(dup>=0){if(r.lastWatchedMs>snapshot[dup].lastWatchedMs)snapshot[dup]=r;}
+    else snapshot[n++]=r;
   }
-  free(r);
-  // Vazio nao apaga nada: quem consome so aplica o que veio.
-  nCaixa = k;
-  return k;
+  free(body);pthread_mutex_lock(&mailboxMu);
+  if(started!=epoch){pthread_mutex_unlock(&mailboxMu);free(snapshot);return -1;}
+  /* Reconcile before any push in this cycle. Staging until the UI frame let
+   * stale pending rows overwrite newer progress from another device. */
+  int changed=prog_aplicar_snapshot(profile,snapshot,n);
+  free(mailbox);mailbox=snapshot;mailboxCount=n;mailboxProfile=profile;mailboxChanged+=changed;
+  pthread_mutex_unlock(&mailboxMu);return n;
 }
-
+static int flushDeletes(int profile) {
+  ProgRegistro *sent=calloc(PROG_MAX,sizeof *sent);if(!sent)return -1;
+  int n=prog_pendentes_perfil(profile,sent,PROG_MAX,1);if(!n){free(sent);return 0;}
+  Jsw w;jsw_iniciar(&w);jsw_obj_ini(&w);jsw_ci(&w,"p_profile_id",profile);jsw_chave(&w,"p_keys");jsw_arr_ini(&w);
+  for(int i=0;i<n;i++)jsw_str(&w,sent[i].chave);jsw_arr_fim(&w);jsw_obj_fim(&w);
+  int status=0;char *body=sessao_rpc("sync_delete_watch_progress",jsw_texto_final(&w),&status);jsw_livre(&w);
+  int ok=success(body,status);free(body);if(ok)prog_confirmar(sent,n);free(sent);return ok?n:-1;
+}
 int syncprog_empurrar(void) {
-  static ProgRegistro pend[PROG_MAX];
-  static const char *chaves[PROG_MAX];
-  Jsw w;
-  char *r;
-  int n, i, k = 0, st = 0;
-
-  n = prog_pendentes(pend, PROG_MAX);
-  if (n <= 0) return 0;   // vazio nunca vira push; delecao tem RPC propria
-
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_cs(&w, "p_origin_client_id", dados_cliente_id());
-  jsw_chave(&w, "p_entries");
-  jsw_arr_ini(&w);
-  for (i = 0; i < n; i++) {
-    const ProgRegistro *p = &pend[i];
-    char video[64];
-    if (p->durSeg < DUR_MINIMA_SEG) continue;   // ruido: o web tambem nao manda
-    if (p->episodio > 0) snprintf(video, sizeof video, PREFIXO_EPISODIO "%d:%d", p->temporada, p->episodio);
-    else                 snprintf(video, sizeof video, "%s", p->contentId);
-    jsw_obj_ini(&w);
-    jsw_cs(&w, "content_id", p->contentId);
-    jsw_cs(&w, "content_type", p->tipo);
-    jsw_cs(&w, "video_id", video);
-    if (p->episodio > 0) { jsw_ci(&w, "season", p->temporada); jsw_ci(&w, "episode", p->episodio); }
-    else                 { jsw_chave(&w, "season"); jsw_nulo(&w);
-                           jsw_chave(&w, "episode"); jsw_nulo(&w); }
-    jsw_ci(&w, "position", (long long)(p->posSeg * 1000.0));
-    jsw_ci(&w, "duration", (long long)(p->durSeg * 1000.0));
-    jsw_ci(&w, "last_watched", p->lastWatchedMs > 0 ? p->lastWatchedMs : prog_agora_ms());
-    jsw_cs(&w, "progress_key", p->chave);
-    jsw_obj_fim(&w);
-    chaves[k++] = p->chave;
+  int profile=perfis_ativo();if(flushDeletes(profile)<0)return -1;
+  ProgRegistro *sent=calloc(PROG_MAX,sizeof *sent);if(!sent)return -1;
+  int n=prog_pendentes_perfil(profile,sent,PROG_MAX,0),k=0,status=0;
+  if(!n){free(sent);return 0;}
+  Jsw w;jsw_iniciar(&w);jsw_obj_ini(&w);jsw_ci(&w,"p_profile_id",profile);jsw_cs(&w,"p_origin_client_id",dados_cliente_id());jsw_chave(&w,"p_entries");jsw_arr_ini(&w);
+  for(int i=0;i<n;i++) {
+    ProgRegistro *r=&sent[i];if(r->durSeg>0 && r->durSeg<60)continue;
+    char video[128];if(r->videoId[0])snprintf(video,sizeof video,"%s",r->videoId);
+    else if(r->episodio>0)snprintf(video,sizeof video,"__nuvio_episode__:%d:%d",r->temporada,r->episodio);
+    else snprintf(video,sizeof video,"%s",r->contentId);
+    jsw_obj_ini(&w);jsw_cs(&w,"content_id",r->contentId);jsw_cs(&w,"content_type",r->tipo);jsw_cs(&w,"video_id",video);
+    if(r->episodio>0){jsw_ci(&w,"season",r->temporada);jsw_ci(&w,"episode",r->episodio);}
+    else {jsw_chave(&w,"season");jsw_nulo(&w);jsw_chave(&w,"episode");jsw_nulo(&w);}
+    jsw_ci(&w,"position",(long long)llround(r->posSeg*1000));jsw_ci(&w,"duration",(long long)llround(r->durSeg*1000));
+    jsw_ci(&w,"last_watched",r->lastWatchedMs);jsw_cs(&w,"progress_key",r->chave);
+    if(r->titulo[0])jsw_cs(&w,"title",r->titulo);if(r->poster[0])jsw_cs(&w,"poster",r->poster);if(r->backdrop[0])jsw_cs(&w,"backdrop",r->backdrop);if(r->logo[0])jsw_cs(&w,"logo",r->logo);
+    jsw_obj_fim(&w);sent[k++]=*r;
   }
-  jsw_arr_fim(&w);
-  jsw_obj_fim(&w);
-  if (k == 0) { jsw_livre(&w); return 0; }
-  r = sessao_rpc("sync_push_watch_progress", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
-  if (!ok2xx(r, st)) {
-    printf("[sync] push de progresso falhou (HTTP %d)\n", st);
-    free(r);
-    return -1;
-  }
-  free(r);
-  // So as chaves que foram: o player pode ter gravado outra durante a viagem.
-  prog_marcar_empurrados(chaves, k);
-  return k;
+  jsw_arr_fim(&w);jsw_obj_fim(&w);
+  if(!k || w.erro){jsw_livre(&w);free(sent);return k? -1:0;}
+  char *body=sessao_rpc("sync_push_watch_progress",jsw_texto_final(&w),&status);jsw_livre(&w);
+  int ok=success(body,status);free(body);if(ok)prog_confirmar(sent,k);free(sent);return ok?k:-1;
 }
-
-// APAGA UMA ENTRADA DE PROGRESSO NA CONTA. A outra metade do issue #22: sem
-// isto, tirar um item de "Continuar assistindo" apagava o registro local e a
-// entrada da conta o trazia de volta no ciclo seguinte, exatamente como a do
-// Trakt fazia.
-//
-// `p_keys` e a chave de progresso (prog_chave), a mesma que o push manda em
-// `progress_key` — e nao o content_id. Mandar o id apagaria todos os episodios
-// da serie.
-int syncprog_remover(const char *chave) {
-  Jsw w;
-  char *r;
-  int st = 0, ok;
-  if (!chave || !chave[0]) return 0;
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_chave(&w, "p_keys");
-  jsw_arr_ini(&w);
-  jsw_str(&w, chave);
-  jsw_arr_fim(&w);
-  jsw_obj_fim(&w);
-  r = sessao_rpc("sync_delete_watch_progress", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
-  ok = ok2xx(r, st);
-  free(r);
-  printf("[sync] progresso removido da conta: %s -> %s (HTTP %d)\n",
-         chave, ok ? "ok" : "falhou", st);
-  fflush(stdout);
-  return ok;
+int syncprog_remover(const char *key) {
+  if(!key||!*key)return 0;prog_remover(key);return flushDeletes(perfis_ativo())>=0;
 }
-
-// MARCA OU DESMARCA UM LOTE DE EPISODIOS NA CONTA.
-//
-// A outra metade do gesto: o Trakt e opcional, a conta Nuvio nem sempre, e quem
-// usa so a conta tambem tem de conseguir marcar um episodio. Uma RPC para o
-// lote inteiro, do mesmo jeito que o Trakt.
-//
-// AS DUAS FORMAS SAO DIFERENTES, e e o contrato quem manda (PLANO-CONTA-SYNC
-// secao 1.5): o push leva ITENS completos ({content_id, content_type, season,
-// episode, watched_at}) e o delete leva CHAVES ({content_id, season, episode}).
-// Mandar a forma do push no delete apagaria nada em silencio.
-int syncep_empurrar(const char *imdb, const char *tipo,
-                    const VistoPar *pares, int qtd, int visto) {
-  Jsw w;
-  char *r, id[24];
-  int i, st = 0, ok;
-  long long agora;
-  if (!imdb || !imdb[0] || !pares || qtd < 1) return 0;
-  for (i = 0; imdb[i] && imdb[i] != ':' && i < (int)sizeof id - 1; i++) id[i] = imdb[i];
-  id[i] = 0;
-  if (!id[0]) return 0;
-  agora = prog_agora_ms();
-
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  // O PERFIL VAI NO CORPO, como no web (watchedItemsSyncService.js manda
-  // p_profile_id no push E no delete). Sem ele a linha caia no perfil padrao
-  // do servidor, nao no da pessoa que marcou.
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_chave(&w, visto ? "p_items" : "p_keys");
-  jsw_arr_ini(&w);
-  for (i = 0; i < qtd; i++) {
-    jsw_obj_ini(&w);
-    jsw_cs(&w, "content_id", id);
-    if (visto) {
-      jsw_cs(&w, "content_type", tipo && tipo[0] ? tipo : "series");
-      jsw_ci(&w, "watched_at", agora);
-    }
-    jsw_ci(&w, "season", pares[i].temporada);
-    jsw_ci(&w, "episode", pares[i].episodio);
-    jsw_obj_fim(&w);
-  }
-  jsw_arr_fim(&w);
-  jsw_obj_fim(&w);
-
-  r = sessao_rpc(visto ? "sync_push_watched_items" : "sync_delete_watched_items",
-                 jsw_texto_final(&w), &st);
-  jsw_livre(&w);
-  ok = ok2xx(r, st);
-  free(r);
-  printf("[sync] %s %d episodios de %s na conta -> %s (HTTP %d)\n",
-         visto ? "marcar" : "desmarcar", qtd, id, ok ? "ok" : "falhou", st);
-  fflush(stdout);
-  return ok;
+int syncprog_aplicar(int *matched) {
+  pthread_mutex_lock(&mailboxMu);ProgRegistro *snapshot=mailbox;int n=mailboxCount,profile=mailboxProfile;
+  int changed=mailboxChanged;mailboxChanged=0;mailbox=NULL;mailboxCount=0;pthread_mutex_unlock(&mailboxMu);
+  if(matched)*matched=n;
+  free(snapshot);
+  /* Catalog projection is rebuilt from the repository, never arrival order. */
+  if(changed && profile==perfis_ativo())cat_reaplicar_progresso();
+  return changed;
 }
-
-// O TITULO INTEIRO NA CONTA: a linha de watched_items com season/episode
-// nulos, que e o que o web grava para filme (toRemoteItem) e o que
-// contalib_aplicar_vistos le como "titulo visto" (temporada e episodio 0).
-// Mesma tabela e mesmas duas RPCs dos episodios; nenhuma tabela nova. Delete e
-// so {content_id}, a forma de toDeleteKey para linha sem temporada.
-int syncvisto_titulo(const char *imdb, const char *tipo, int visto) {
-  Jsw w;
-  char *r, id[24];
-  int i, st = 0, ok;
-  if (!imdb || imdb[0] != 't') return 0;
-  for (i = 0; imdb[i] && imdb[i] != ':' && i < (int)sizeof id - 1; i++) id[i] = imdb[i];
-  id[i] = 0;
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_chave(&w, visto ? "p_items" : "p_keys");
-  jsw_arr_ini(&w);
-  jsw_obj_ini(&w);
-  jsw_cs(&w, "content_id", id);
-  if (visto) {
-    jsw_cs(&w, "content_type", tipo && !strcmp(tipo, "series") ? "series" : "movie");
-    jsw_cs(&w, "title", "");
-    jsw_chave(&w, "season");  jsw_nulo(&w);
-    jsw_chave(&w, "episode"); jsw_nulo(&w);
-    jsw_ci(&w, "watched_at", prog_agora_ms());
-  }
-  jsw_obj_fim(&w);
-  jsw_arr_fim(&w);
-  jsw_obj_fim(&w);
-  r = sessao_rpc(visto ? "sync_push_watched_items" : "sync_delete_watched_items",
-                 jsw_texto_final(&w), &st);
-  jsw_livre(&w);
-  ok = ok2xx(r, st);
-  free(r);
-  printf("[sync] %s titulo %s na conta -> %s (HTTP %d)\n",
-         visto ? "marcar" : "desmarcar", id, ok ? "ok" : "falhou", st);
-  fflush(stdout);
-  return ok;
-}
-
-int syncprog_aplicar(int *casaram) {
-  int i, aceitos = 0, noCatalogo = 0;
-  for (i = 0; i < nCaixa; i++) {
-    if (!prog_aplicar_remoto(&caixa[i])) continue;
-    aceitos++;
-    { int idx = cat_indice_por_imdb(caixa[i].contentId);
-      if (idx >= 0) {
-        cat_aplicar_progresso(idx, caixa[i].posSeg, caixa[i].durSeg,
-                              caixa[i].temporada, caixa[i].episodio);
-        noCatalogo++;
-      } }
-  }
-  if (nCaixa)
-    printf("[sync] progresso: %d linhas, %d aceitas, %d no catalogo\n", nCaixa, aceitos, noCatalogo);
-  nCaixa = 0;
-  if (casaram) *casaram = noCatalogo;
-  return aceitos;
-}
-
-int  syncprog_puxadas(void) { return nCaixa; }
-void syncprog_esquecer(void) { nCaixa = 0; }
+int syncprog_puxadas(void){pthread_mutex_lock(&mailboxMu);int n=mailboxCount;pthread_mutex_unlock(&mailboxMu);return n;}
+void syncprog_esquecer(void){pthread_mutex_lock(&mailboxMu);epoch++;free(mailbox);mailbox=NULL;mailboxCount=mailboxChanged=0;pthread_mutex_unlock(&mailboxMu);}

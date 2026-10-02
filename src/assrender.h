@@ -8,14 +8,13 @@
  * cada evento pode ter varias camadas, desenho, fontes, movimento e efeitos
  * no relogio. Esta interface deixa o player consumir somente imagens RGBA e
  * mantem a escolha da biblioteca (libass no ARM/WASM, fallback no parser
- * antigo) fora da tela de reproducao.
+ * de cues) fora da tela de reproducao.
  */
 
 /* Carrega um documento ASS completo. O corpo precisa permanecer em UTF-8 e
- * pode conter qualquer tamanho; o modulo faz a propria copia. */
+ * tem limite de 4 MB; o módulo faz a própria cópia. */
 int  assrender_carregar(const char *corpo, size_t tamanho, unsigned geracao);
-/* Mesma faixa (mesma geracao), documento maior: troca a faixa do libass SEM
- * apagar o quadro em tela. Com geracao diferente ou sem faixa, e carregar. */
+/* Instala uma nova janela completa da mesma seleção antes da apresentação. */
 int  assrender_atualizar(const char *corpo, size_t tamanho, unsigned geracao);
 void assrender_limpar(void);
 void assrender_limpar_fontes(void);
@@ -35,7 +34,7 @@ void assrender_definir_estilo(int negrito, int sombra, int corRgb,
 
 /* Area em que o video aparece na tela (x,y,w,h, podendo passar da tela nos
  * modos de zoom), dimensoes do quadro decodificado e escala das fontes do
- * arquivo (1.0 = como o autor fez). Barato: so pede ao worker quando muda. */
+ * arquivo (1.0 = como o autor fez). Barato: aplica somente quando muda. */
 void assrender_definir_layout(float x, float y, float w, float h,
                               int videoW, int videoH, double escalaFonte);
 
@@ -57,8 +56,7 @@ int  assrender_ativo(void);
 int  assrender_quadro_cpu(double posSeg);
 const char *assrender_diagnostico(void);
 
-/* Cada troca de faixa/seek invalida resultados antigos antes de o worker
- * publicar o proximo quadro. */
+/* Cada troca de faixa/seek invalida resultados antigos antes da próxima apresentação. */
 void assrender_geracao(unsigned geracao);
 
 /* Inicia o libass num fio a parte, se ainda nao iniciou. Na C9 o inicio le a

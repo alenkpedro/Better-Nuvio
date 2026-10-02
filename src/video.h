@@ -135,10 +135,10 @@ int    video_terminou(void); // 1 depois do fim de fluxo (endOfStream) da fonte 
 // Tudo isto sai do evento sourceInfo da assinatura do uMS: o addon nao informa
 // nada disso, e so o pipeline sabe o que ha DENTRO do arquivo.
 
-// 32 e nao 12 (#92): um "Multi-Subs" de anime passa de doze legendas, e a
-// lista da TV cortada em 12 nunca casa pelo ordinal com o arquivo inteiro —
-// nenhuma faixa ASS ia ao overlay do app, todas ficavam com a TV.
-#define NV_FAIXA_MAX 32
+// A lista precisa caber inteira para casar os ordinais com o Matroska.
+// Releases com 43 legendas ultrapassavam o antigo teto de 32: nenhuma faixa
+// recebia codec/ordinal e a legenda nunca passava da TV para o estilo do app.
+#define NV_FAIXA_MAX 128
 
 typedef struct {
   char rotulo[48];   // "Ingles · Atmos 5.1" ou "Legenda 3"
@@ -226,6 +226,8 @@ const char *video_hdr(void);   // hdrType cru: "none", "HDR10", "DolbyVision"...
 // usada pelos modos de zoom do player.
 int  video_largura(void);
 int  video_altura(void);
+// Taxa do fluxo decodificado quando o player a informou; 0 = desconhecida.
+double video_fps_atual(void);
 
 // --- TELA PRETA COM AUDIO TOCANDO -------------------------------------------
 //

@@ -1611,6 +1611,7 @@
   { "Ranking na ordem original", "Ranking in its original order" },
   { "Recarregar", "Reload" },
   { "Recolhida", "Collapsed" },
+  { "Recomendada", "Recommended" },
   { "Recomendados, com Instalar", "Recommended, with Install" },
   { "Recomendar a um amigo", "Recommend to a friend" },
   { "Recomendar um título", "Recommend a title" },

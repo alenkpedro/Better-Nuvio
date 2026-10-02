@@ -1,8 +1,10 @@
 #include "cwordem.h"
+#include "progresso.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
 
 int cwo_futuro(const CwoItem *it, long long agoraMs) {
   return it && it->aSeguir && it->estreiaMs != CWO_SEM_DATA && it->estreiaMs > agoraMs;
@@ -14,9 +16,9 @@ int cwo_ordenar(const CwoItem *v, int n, int modo, long long agoraMs, int *perm)
   for (i = 0; i < n; i++) perm[i] = i;
   if (modo != CWO_STREAMING && modo != CWO_SEPARAR) return n;
   // Particao estavel: exibidos na ordem que chegaram (a do instante), futuros
-  // depois. n <= 36 (tres fontes de 12): um vetor na pilha basta.
-  { int fut[64], nf = 0;
-    if (n > 64) n = 64;
+  // depois. A lista completa nao pode ser truncada pela ordenacao.
+  { int *fut=malloc((size_t)n*sizeof *fut), nf = 0;
+    if(!fut)return n;
     for (i = 0; i < n; i++) {
       if (cwo_futuro(&v[i], agoraMs)) fut[nf++] = i;
       else perm[w++] = i;
@@ -28,7 +30,7 @@ int cwo_ordenar(const CwoItem *v, int n, int modo, long long agoraMs, int *perm)
       for (k = i - 1; k >= 0 && v[fut[k]].estreiaMs > v[t].estreiaMs; k--) fut[k + 1] = fut[k];
       fut[k + 1] = t;
     }
-    for (i = 0; i < nf; i++) perm[w++] = fut[i]; }
+    for (i = 0; i < nf; i++) perm[w++] = fut[i]; free(fut); }
   return principal;
 }
 
@@ -47,11 +49,10 @@ void cwo_corte(int principal, int nFut, int max, int *nPrincipal, int *nFuturos)
 }
 
 // --- Datas de estreia --------------------------------------------------------
-// 96: a fileira tem ate 12 itens por fonte e o Trakt guarda ate 64 "a seguir"
-// (TK_ULT_MAX). Cheia, a mais velha e sobrescrita em roda — o que importa e a
-// rodada atual.
-#define CWO_EST_MAX 96
-static struct { char id[40]; long long ms; } est[CWO_EST_MAX];
+// A rodada pode conter todo o historico da conta e os dois provedores.
+// Cheia, a mais velha e sobrescrita em roda.
+#define CWO_EST_MAX (PROG_MAX+128)
+static struct { char id[64]; long long ms; } est[CWO_EST_MAX];
 static int nEst, proxEst;
 static pthread_mutex_t estTrava = PTHREAD_MUTEX_INITIALIZER;
 
@@ -80,7 +81,7 @@ long long cwo_estreia(const char *id) {
 }
 
 // --- Fileira de futuros ------------------------------------------------------
-#define CWO_FUT_MAX 36
+#define CWO_FUT_MAX (PROG_MAX+128)
 static char fut[CWO_FUT_MAX][64];
 static int nFut;
 static pthread_mutex_t futTrava = PTHREAD_MUTEX_INITIALIZER;

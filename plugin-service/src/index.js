@@ -8,14 +8,15 @@ const http = require("http");
 const path = require("path");
 const vm = require("vm");
 const ROOT = path.join(__dirname, "..");
-const PORT = 2732;
-const FETCH_PORT = 2733;
+const PORT = Number(process.env.NUVIO_PLUGIN_PORT) || 2732;
+const FETCH_PORT = Number(process.env.NUVIO_PLUGIN_FETCH_PORT) || 2733;
 const MAX_BODY = 1024 * 1024;
 // A fonte nativa aguarda no maximo 70 s. Um provedor travado nao pode manter
 // os addons normais escondidos atras de uma busca de plugins de dois minutos.
 const FETCH_TIMEOUT = 15000;
 const serviceId = "com.betternuvio.app.plugin";
 const fetchServer = require("../runtime/plugin-http.cjs").createPluginHttpServer({port: FETCH_PORT});
+const embeddedSubtitles = require("../runtime/nuvio/embedded-subtitles.cjs");
 let service;
 try { service = new (require("webos-service"))(serviceId); }
 catch (error) {
@@ -30,8 +31,19 @@ global.require = require;
 global.importScripts = function () {
   if (!global.QJS) vm.runInThisContext(fs.readFileSync(path.join(ROOT,"runtime/quickjs-emscripten.global.js"),"utf8"));
 };
-vm.runInThisContext(fs.readFileSync(path.join(ROOT,"runtime/plugin-worker.js"),"utf8"));
-const workerReceive = global.onmessage;
+// Subtitle extraction must start even when this TV's Node cannot host the
+// optional QuickJS worker. Initialize that worker only for plugin requests.
+let workerReceive;
+let workerError;
+function ensureWorker() {
+  if (workerReceive) return;
+  if (workerError) throw workerError;
+  try {
+    if (typeof WebAssembly !== "object") throw new Error("QuickJS requires WebAssembly support");
+    vm.runInThisContext(fs.readFileSync(path.join(ROOT,"runtime/plugin-worker.js"),"utf8"));
+    workerReceive = global.onmessage;
+  } catch (error) { workerError=error; throw error; }
+}
 let active = null;
 const queue = [];
 const documentCache = new Map();
@@ -90,7 +102,11 @@ function runNext() {
 }
 
 function execute(code, filename, scraperId, args, tmdbKey="") {
-  return new Promise((resolve,reject) => { queue.push({code,filename,scraperId,args,tmdbKey,resolve,reject}); runNext(); });
+  return new Promise((resolve,reject) => {
+    try { ensureWorker(); }
+    catch (error) { reject(error); return; }
+    queue.push({code,filename,scraperId,args,tmdbKey,resolve,reject}); runNext();
+  });
 }
 
 async function fetchText(url, maxBytes=MAX_BODY) {
@@ -196,19 +212,36 @@ function readJson(req) {
   });
 }
 
+function respond(res,status,body,type="application/json") {
+  // writeHead returns undefined in the Node versions shipped on older TVs.
+  res.writeHead(status,{"Content-Type":type}); res.end(body);
+}
 const server = http.createServer(async (req,res) => {
-  if (req.socket.remoteAddress !== "127.0.0.1" && req.socket.remoteAddress !== "::1") {res.writeHead(403).end();return;}
+  if (req.socket.remoteAddress !== "127.0.0.1" && req.socket.remoteAddress !== "::1") {respond(res,403);return;}
   if (req.method === "GET" && req.url === "/health") {
-    res.writeHead(200,{"Content-Type":"text/plain"}).end("ok"); return;
+    respond(res,200,"ok","text/plain"); return;
   }
   if (req.method === "POST" && req.url === "/clear") {
-    documentCache.clear(); res.writeHead(200).end("ok"); return;
+    embeddedSubtitles.clearBitmapSubtitleCaches();
+    documentCache.clear(); respond(res,200,"ok","text/plain"); return;
   }
-  if (req.method !== "POST" || req.url !== "/streams") {res.writeHead(404).end();return;}
+  if (req.method === "POST" && req.url === "/subtitles/window") {
+    try {
+      const result = await embeddedSubtitles.getEmbeddedTextSubtitleWindow(await readJson(req));
+      respond(res,200,JSON.stringify(result));
+    } catch (error) {
+      respond(res,502,JSON.stringify({
+        errorCode: String(error.code || "SUBTITLE_WINDOW_FAILED"),
+        errorText: String(error.message || error)
+      }));
+    }
+    return;
+  }
+  if (req.method !== "POST" || req.url !== "/streams") {respond(res,404);return;}
   try {
     const result = await streams(await readJson(req));
-    res.writeHead(200,{"Content-Type":"application/json"}).end(JSON.stringify(result));
-  } catch(error) {res.writeHead(500).end(JSON.stringify({error:String(error.message || error)}));}
+    respond(res,200,JSON.stringify(result));
+  } catch(error) {respond(res,500,JSON.stringify({error:String(error.message || error)}));}
 });
 
 function start() {

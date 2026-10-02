@@ -45,10 +45,17 @@ char *rede_baixar(const char *url, int s) {
     const char *p = strstr(url, "addon-");
     if (p) sscanf(p, "addon-%d", &id);
     usado += (size_t)snprintf(texto+usado, sizeof texto-usado, "{\"subtitles\":[");
-    for (int j = 0; j < 20; j++)
+    for (int j = 0; j < 20; j++) {
+      const char *campo = j == 0 ? "\"subtitleFileName\":\"Teste.S01E01.srt\",\"movieReleaseName\":\"Teste.S01E01.WEB-DL\",\"fpsMilli\":23976" :
+                          j == 1 ? "\"fileName\":\"Teste.S01E02.srt\"" :
+                          j == 2 ? "\"name\":\"Teste.S01E03.srt\"" :
+                          j == 3 ? "\"title\":\"Teste.S01E04.srt\"" :
+                          j == 4 ? "\"movieReleaseName\":\"Teste.S01E05.WEB-DL\"" :
+                          j == 5 ? "" : "\"subtitleFileName\":\"Teste.srt\"";
       usado += (size_t)snprintf(texto+usado, sizeof texto-usado,
-        "%s{\"lang\":\"pt-BR\",\"url\":\"https://legenda.test/%d/%d.srt\","
-        "\"subtitleFileName\":\"Teste.%d.srt\"}", j ? "," : "", id, j, j);
+        "%s{\"lang\":\"pt-BR\",\"url\":\"https://legenda.test/%d/%d.srt\"%s%s}",
+        j ? "," : "", id, j, *campo ? "," : "", campo);
+    }
     snprintf(texto+usado, sizeof texto-usado, "]}");
     return strdup(texto);
   }
@@ -91,6 +98,7 @@ const char *ling_legenda2(void) { return "en"; }
 int ling_casa(const char *a, const char *b) { return !*b || !strcasecmp(a,b); }
 int ling_legenda_visivel(const char *codigo) { (void)codigo; return 1; }
 const char *ling_nome(const char *s) { return s; }
+const char *ling_grupo_codigo(const char *s) {return !strcasecmp(s,"pt-BR")?"pt-br":s;}
 const char *rede_url_publica(const char *url, char *dst, unsigned tam) {
   snprintf(dst, tam, "%s", url ? url : ""); return dst; }
 void marco(const char *s) { (void)s; }
@@ -272,17 +280,28 @@ int main(void) {
     addons_base_por_id("app.xperience.11111111-1111-1111-1111-111111111111"),
     "https://addon-1.test");
 
-  // 16 provedores retornam 20 legendas cada. A lista global comporta 256 e
-  // distribui rodadas: o ultimo provedor tambem precisa aparecer.
+  // All 20 results from each of the 16 subtitle providers must survive.
   addons_buscar_legendas("tt1234567", "movie");
   for (int espera = 0; espera < 3000 && !addons_legendas_prontas(); espera++) usleep(1000);
-  conferir("legendas de multiplos provedores", addons_n_legendas(), LEG_MAX);
-  { int viuUltimo = 0;
+  conferir("legendas de multiplos provedores", addons_n_legendas(), 16*20);
+  { int viuUltimo = 0, viuNome = 0, viuFps = 0, viuFallback = 0, viuSemNome = 0;
     for (int j = 0; j < addons_n_legendas(); j++) {
       const Legenda *l = addons_legenda(j);
       if (l && !strcmp(l->provedor, "Addon 17")) viuUltimo = 1;
+      if (l && strstr(l->url, "/2/0.srt")) {
+        viuNome = !strcmp(l->arquivo, "Teste.S01E01.srt") &&
+                  !strcmp(l->lancamento, "Teste.S01E01.WEB-DL");
+        viuFps = l->fps > 23.975 && l->fps < 23.977;
+      }
+      if (l && strstr(l->url, "/2/1.srt"))
+        viuFallback = !strcmp(l->arquivo, "Teste.S01E02.srt");
+      if (l && strstr(l->url, "/2/5.srt")) viuSemNome = !l->arquivo[0];
     }
     conferir("ultimo provedor de legenda presente", viuUltimo, 1);
+    conferir("nome e release preservados", viuNome, 1);
+    conferir("fpsMilli convertido", viuFps, 1);
+    conferir("fileName alternativo", viuFallback, 1);
+    conferir("sem nome permanece sem match", viuSemNome, 1);
   }
 
   // Duas configuracoes do AIOStreams com o mesmo nome devem ser consultadas

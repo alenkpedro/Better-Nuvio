@@ -993,7 +993,8 @@ void detail_abrir(const HomeItem *it) {
     int t = 0, e = 0, achou = 0;
     if (ci0 && ci0->progresso > 0 && ci0->progresso < 90 &&
         ci0->temporada > 0 && ci0->episodio > 0) {
-      t = ci0->temporada; e = ci0->episodio; achou = 1;
+      t = seriealias_monster_card_temporada(ci0) ? 1 : ci0->temporada;
+      e = ci0->episodio; achou = 1;
     } else {
       const CatEp *e0 = cat_episodio(idx, 0);
       if (e0) { t = e0->temporada; e = e0->episodio; achou = 1; }
@@ -1011,6 +1012,7 @@ void detail_abrir(const HomeItem *it) {
       if (achouCol >= 0) epAncora = achouCol;
     }
     if (ci0 && ci0->temporadaFonte > 0 &&
+        !seriealias_monster_card_temporada(ci0) &&
         !(ci0->progresso > 0 && ci0->progresso < 90)) {
       temporada = ci0->temporadaFonte - 1;
       for (int k = 0; k < ci0->nTemporadas; k++)
@@ -1087,10 +1089,11 @@ static int episodioAlvo(int *temp, int *epis, int *origem) {
   // Um card de arco abre a temporada daquele arco, mesmo que o progresso da
   // serie principal ainda nao tenha chegado do Trakt.
   if (ci && ci->temporadaFonte > 0) {
+    int temporadaDoCard = seriealias_monster_card_temporada(ci) ? 1 : ci->temporadaFonte;
     const CatEp *primeiro = NULL;
     for (int i = 0; i < cat_n_episodios(idx); i++) {
       const CatEp *candidato = cat_episodio(idx, i);
-      if (!candidato || candidato->temporada != ci->temporadaFonte) continue;
+      if (!candidato || candidato->temporada != temporadaDoCard) continue;
       if (!primeiro) primeiro = candidato;
       if (!extras_ep_visto(candidato->temporada, candidato->episodio)) {
         if (temp) *temp = candidato->temporada;
@@ -1103,7 +1106,7 @@ static int episodioAlvo(int *temp, int *epis, int *origem) {
       if (epis) *epis = primeiro->episodio;
       return 1;
     }
-    if (temp) *temp = ci->temporadaFonte;
+    if (temp) *temp = temporadaDoCard;
     if (epis) *epis = 1;
     return 1;
   }
@@ -2250,8 +2253,9 @@ void detail_atualizar(float dt, Uint32 agora) {
       revistaVista = rev;
       if (ehSerie() && cat_n_episodios(idx) < 1) {
         const CatItem *ci = cat_item(idx);
-        desc_episodios(idx, ci ? (ci->temporadaFonte > 0 ?
-                                  ci->temporadaFonte : ci->temporada) : 0);
+        desc_episodios(idx, ci ? (seriealias_monster_card_temporada(ci) ? 1 :
+                                  ci->temporadaFonte > 0 ? ci->temporadaFonte :
+                                  ci->temporada) : 0);
       }
     } }
   sincronizarColunas();

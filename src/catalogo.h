@@ -8,6 +8,8 @@
 #ifndef NV_CATALOGO_H
 #define NV_CATALOGO_H
 
+#include <string.h>
+
 // 40 titulos hoje (14 do historico do dono + 26 dos catalogos). A folga evita
 // o corte silencioso que ja aconteceu: com 32 os oito ultimos sumiam sem aviso.
 // Nao ha mais teto de catalogo: o vetor cresce conforme a rede entrega. Um
@@ -129,10 +131,19 @@ typedef struct {
   // "a seguir" sem confirmacao): um vetor de instantes indexado por posicao
   // dessincroniza ali, em silencio.
   long long retomadoMs;
+  // Posicao absoluta da conta, inclusive quando duration=0.
+  double posicaoSeg;
+  double duracaoSeg;
+  int continuarSeguinte;
+  int continuarGerenciado; /* Watch-service snapshot; catalog cannot reproject it. */
 } CatItem;
 
 static inline const char *cat_id_fonte(const CatItem *item) {
   return item && item->imdbFonte[0] ? item->imdbFonte : item ? item->imdb : "";
+}
+
+static inline int cat_id_lizzie(const char *id) {
+  return id && !strncmp(id, "tmdb:299939", 11) && (!id[11] || id[11] == ':');
 }
 
 // Um episodio de serie. Vem de art/episodios.txt, gerado a partir do campo
@@ -301,6 +312,7 @@ int cat_tirar_item_da_fileira(int indice);
 int cat_tirar_continuar(const char *imdb);
 void cat_zerar_progresso(int indice);
 
+void cat_reaplicar_progresso(void);
 void cat_salvar_progresso(int indice, double posSeg, double durSeg);
 void cat_salvar_progresso_ep(int indice, double posSeg, double durSeg, int temporada, int episodio);
 

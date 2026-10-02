@@ -14,6 +14,16 @@ void seekr_duracao(double segundos); // chamar so com duracao real do pipeline
 void seekr_prefetch(double segundos); // uma miniatura proxima da posicao inicial
 void seekr_bombear(void);            // upload GL, somente no fio de desenho
 int seekr_previa(double segundos, GLuint *tex, double *cueSegundos);
+#define SEEKR_PREVIAS 5
+typedef struct {
+  GLuint tex;
+  double segundos;
+  float aspecto;
+  int valido;
+} SeekrPrevia;
+// O centro e o cue escolhido; os vizinhos seguem a ordem do VTT. Extremos
+// ficam invalidos, sem repetir o primeiro/ultimo quadro para preencher a fila.
+int seekr_faixa(double segundos, SeekrPrevia quadros[SEEKR_PREVIAS]);
 void seekr_fechar(void);
 
 // Leitor WebVTT puro, usado pelo teste e pelo worker. Devolve o numero de cues.

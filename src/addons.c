@@ -1,4 +1,5 @@
 #include "addons.h"
+#include "subtitle_catalog.h"
 #include "idioma.h"
 #include "linguas.h"
 #include "streams.h"
@@ -472,9 +473,11 @@ static Legenda legs[LEG_MAX];
 static int nLegs;
 static pthread_t fioLeg;
 static int fioLegVivo, fioLegCriado, legParar;
-static char legId[64], legTipo[16];
-static unsigned legGeracao;
+static char legId[64], legTipo[16], legFilename[512], legHash[64];
+static uint64_t legSize;
+static unsigned legGeracao, legVersao;
 static pthread_mutex_t legTrava = PTHREAD_MUTEX_INITIALIZER;
+unsigned addons_legendas_versao(void) {pthread_mutex_lock(&legTrava);unsigned v=legVersao;pthread_mutex_unlock(&legTrava);return v;}
 
 int addons_n_legendas(void) {
   int n;
@@ -494,26 +497,6 @@ const Legenda *addons_legenda(int i) {
   return r;
 }
 
-// Grupos de idioma da busca de legenda, NA ORDEM em que aparecem.
-//
-// O QUE ESTAVA AQUI: duas listas cravadas ("pob","pt-br",... e "eng","en",...)
-// com o comentario "o usuario pediu explicitamente estes dois grupos". Toda
-// legenda de outro idioma era descartada sem aviso — quem instala o pacote e
-// fala espanhol abria o player e nao achava legenda nenhuma.
-//
-// AGORA: os grupos vem da preferencia (Ajustes desta TV, senao a conta). SEM
-// preferencia nenhuma, ha UM grupo vazio, e grupo vazio casa com tudo: a lista
-// sai sem filtro. Ver linguas.h.
-static int gruposIdioma(const char *g[2]) {
-  const char *a = ling_legenda(), *b = ling_legenda2();
-  int n = 0;
-  if (a[0] && strcasecmp(a, "none")) g[n++] = a;
-  if (b[0] && strcasecmp(b, "none") && !ling_casa(b, a)) g[n++] = b;
-  if (!n) { g[n++] = ""; }
-  return n;
-}
-
-
 static int pedidoMudou(unsigned geracao) {
   int mudou;
   pthread_mutex_lock(&legTrava);
@@ -526,6 +509,41 @@ static void episodioPedido(const char *id, int *temporada, int *episodio) {
   const char *p = strchr(id, ':');
   *temporada = *episodio = 0;
   if (p) sscanf(p + 1, "%d:%d", temporada, episodio);
+}
+
+static void nomesLegenda(const char *obj, const char *fim,
+                         char *arquivo, size_t tamArquivo,
+                         char *lancamento, size_t tamLancamento) {
+  static const char *const nomes[] = {
+    "subtitleFileName", "fileName", "filename", "name", "title"
+  };
+  static const char *const releases[] = {
+    "movieReleaseName", "releaseName", "release"
+  };
+  arquivo[0] = lancamento[0] = 0;
+  for (size_t i = 0; i < sizeof nomes / sizeof nomes[0]; i++)
+    if (js_texto(obj, fim, nomes[i], arquivo, tamArquivo)) break;
+  for (size_t i = 0; i < sizeof releases / sizeof releases[0]; i++)
+    if (js_texto(obj, fim, releases[i], lancamento, tamLancamento)) break;
+  if (!arquivo[0]) {
+    char url[600];
+    if (js_texto(obj, fim, "url", url, sizeof url)) {
+      const char *base = strrchr(url, '/');
+      const char *ext;
+      base = base ? base + 1 : url;
+      ext = strrchr(base, '.');
+      if (ext && (!strncasecmp(ext, ".srt", 4) || !strncasecmp(ext, ".ass", 4) ||
+                  !strncasecmp(ext, ".ssa", 4) || !strncasecmp(ext, ".vtt", 4))) {
+        size_t len = strcspn(base, "?#");
+        if (len > 8 && len < tamArquivo) {
+          memcpy(arquivo, base, len);
+          arquivo[len] = 0;
+        }
+      }
+    }
+  }
+  if (!arquivo[0] && lancamento[0])
+    snprintf(arquivo, tamArquivo, "%s", lancamento);
 }
 
 static int episodioCorreto(const char *obj, const char *fim, int temporada, int episodio) {
@@ -541,26 +559,28 @@ static int episodioCorreto(const char *obj, const char *fim, int temporada, int 
   // arquivo. Antes aceitavamos S02E03 numa busca por T2E4 e depois fabricavamos
   // o rotulo T2E4 com base no pedido, escondendo o erro. Se o nome traz uma
   // identidade verificavel, ela precisa casar; nome sem marcador segue aceito.
-  { char nome[160] = "", baixo[160]; size_t i;
-    if (!js_texto(obj, fim, "subtitleFileName", nome, sizeof nome))
-      js_texto(obj, fim, "movieReleaseName", nome, sizeof nome);
-    for (i = 0; nome[i] && i + 1 < sizeof baixo; i++)
-      baixo[i] = (char)tolower((unsigned char)nome[i]);
-    baixo[i] = 0;
-    for (i = 0; baixo[i]; i++) {
-      int nt = -1, ne = -1;
-      if (sscanf(baixo + i, "s%2de%2d", &nt, &ne) == 2 ||
-          sscanf(baixo + i, "%2dx%2d", &nt, &ne) == 2)
-        return nt == temporada && ne == episodio;
+  { char nomes[2][256], baixo[256]; size_t i;
+    nomesLegenda(obj, fim, nomes[0], sizeof nomes[0], nomes[1], sizeof nomes[1]);
+    for (int k = 0; k < 2; k++) {
+      for (i = 0; nomes[k][i] && i + 1 < sizeof baixo; i++)
+        baixo[i] = (char)tolower((unsigned char)nomes[k][i]);
+      baixo[i] = 0;
+      for (i = 0; baixo[i]; i++) {
+        int nt = -1, ne = -1;
+        if (sscanf(baixo + i, "s%2de%2d", &nt, &ne) == 2 ||
+            sscanf(baixo + i, "%2dx%2d", &nt, &ne) == 2)
+          if (nt != temporada || ne != episodio) return 0;
+      }
     }
   }
   return 1;
 }
 
 #define LEG_FIOS 4
-#define LEG_POR_ADDON 32
+#define LEG_POR_ADDON LEG_MAX
 typedef struct {
-  char id[64], tipo[16];
+  char id[64], tipo[16], filename[512], hash[64];
+  uint64_t size;
   unsigned geracao;
   int indices[ADD_MAX], n, proximo;
   char *corpos[ADD_MAX];
@@ -577,10 +597,13 @@ static void *fioLegendasAddon(void *u) {
     pthread_mutex_unlock(&c->trava);
     if (ordem >= c->n || pedidoMudou(c->geracao)) return NULL;
     i = c->indices[ordem];
-    { char recurso[160];
-      snprintf(recurso, sizeof recurso, "/subtitles/%s/%s.json", c->tipo, c->id);
+    { char recurso[2048], extra[1792]="", encoded[1536];size_t used=0;
+      if(c->hash[0]) {subtitle_url_encode(c->hash,encoded,sizeof encoded);used+=snprintf(extra+used,sizeof extra-used,"videoHash=%s",encoded);}
+      if(c->size)used+=snprintf(extra+used,sizeof extra-used,"%svideoSize=%llu",used?"&":"",(unsigned long long)c->size);
+      if(c->filename[0]) {subtitle_url_encode(c->filename,encoded,sizeof encoded);snprintf(extra+used,sizeof extra-used,"%sfilename=%s",used?"&":"",encoded);}
+      snprintf(recurso, sizeof recurso, "/subtitles/%s/%s%s%s.json", c->tipo, c->id,extra[0]?"/":"",extra);
       if (!addons_montar_url(i, recurso, url, sizeof url)) continue; }
-    c->corpos[ordem] = rede_baixar(url, 12);
+    c->corpos[ordem] = rede_baixar(url, 20);
   }
 }
 
@@ -607,6 +630,8 @@ static void *buscarLegendas(void *u) {
     snprintf(id, sizeof id, "%s", legId);
     snprintf(tipo, sizeof tipo, "%s", legTipo);
     geracao = legGeracao;
+    snprintf(c.filename,sizeof c.filename,"%s",legFilename);
+    snprintf(c.hash,sizeof c.hash,"%s",legHash);c.size=legSize;
     pthread_mutex_unlock(&legTrava);
     episodioPedido(id, &temporada, &episodio);
 
@@ -628,54 +653,47 @@ static void *buscarLegendas(void *u) {
 
     if (!pedidoMudou(geracao)) for (i = 0; i < c.n; i++) {
       const char *p = c.corpos[i] ? js_array(c.corpos[i], NULL, "subtitles") : NULL;
-      const char *grupos[2];
-      int nGrupos = gruposIdioma(grupos), gi;
       if (!p) continue;
-      porAddon[i] = calloc(LEG_POR_ADDON, sizeof(Legenda));
+      int capacity=0;
+      for(const char *q=p;q && capacity<LEG_POR_ADDON;q=js_prox(js_fim(q)))capacity++;
+      porAddon[i] = calloc(capacity?capacity:1,sizeof(Legenda));
       if (!porAddon[i]) continue;
-      // Preferido e alternativo primeiro, mas outros idiomas continuam
-      // acessiveis. Cada addon ganha espaco antes de mesclar os resultados.
-      for (gi = 0; gi <= nGrupos && contagem[i] < LEG_POR_ADDON; gi++) {
-        const char *q = p;
-        while (q && contagem[i] < LEG_POR_ADDON) {
-          const char *f = js_fim(q);
-          char l[16] = "", nome[120] = "";
-          Legenda *d = &porAddon[i][contagem[i]];
-          int grupo = -1, g;
-          js_texto(q, f, "lang", l, sizeof l);
-          for (g = 0; g < nGrupos; g++) if (ling_casa(l, grupos[g])) { grupo = g; break; }
-          if (l[0] && ling_legenda_visivel(l) &&
-              (gi == grupo || (gi == nGrupos && grupo < 0)) &&
-              episodioCorreto(q, f, temporada, episodio) &&
-              js_texto(q, f, "url", d->url, sizeof d->url)) {
-            js_texto(q, f, "subtitleFileName", nome, sizeof nome);
-            if (!nome[0]) js_texto(q, f, "movieReleaseName", nome, sizeof nome);
-            snprintf(d->idioma, sizeof d->idioma, "%s", l);
-            snprintf(d->provedor, sizeof d->provedor, "%s", addon[c.indices[i]].nome);
-            if (temporada > 0 && episodio > 0)
-              snprintf(d->rotulo, sizeof d->rotulo, i18n("T%dE%d  \xc2\xb7  %s%s%.22s"),
-                       temporada, episodio, i18n(ling_nome(l)), nome[0] ? "  \xc2\xb7  " : "", nome);
-            else
-              snprintf(d->rotulo, sizeof d->rotulo, "%s%s%.36s",
-                       i18n(ling_nome(l)), nome[0] ? "  \xc2\xb7  " : "", nome);
-            contagem[i]++;
-          }
-          q = js_prox(f);
-        }
+      for(const char *q=p;q && contagem[i]<capacity;q=js_prox(js_fim(q))) {
+        const char *f=js_fim(q);Legenda *d=&porAddon[i][contagem[i]];
+        char raw[256]="";memset(d,0,sizeof *d);
+        if(!episodioCorreto(q,f,temporada,episodio) ||
+           !js_texto_raiz_em(q,f,"url",d->url,sizeof d->url) || !d->url[0] || strlen(d->url)>=sizeof d->url-1)continue;
+        js_texto_raiz_em(q,f,"id",d->id,sizeof d->id);
+        js_texto_raiz_em(q,f,"lang",raw,sizeof raw);
+        if(!raw[0])js_texto_raiz_em(q,f,"language",raw,sizeof raw);
+        subtitle_language(raw,d->id,d->idioma,sizeof d->idioma);
+        if(!d->id[0]) { uint32_t hash=0;for(const unsigned char *u=(const unsigned char *)d->url;*u;u++)hash=hash*31+*u;
+          int64_t signedHash=(int32_t)hash;snprintf(d->id,sizeof d->id,"%s-%lld",raw[0]?raw:"unk",(long long)(signedHash<0?-signedHash:signedHash)); }
+        subtitle_headers(q,f,d->cabecalhos,sizeof d->cabecalhos);
+        nomesLegenda(q,f,d->arquivo,sizeof d->arquivo,d->lancamento,sizeof d->lancamento);
+        if(!d->arquivo[0] && strchr(d->id,'.'))snprintf(d->arquivo,sizeof d->arquivo,"%s",d->id);
+        d->fps=js_num(q,f,"fps",0);
+        if(d->fps<=0)d->fps=js_num(q,f,"frameRate",0);
+        if(d->fps<=0)d->fps=js_num(q,f,"fpsMilli",0)/1000.0;
+        if(d->fps<15 || d->fps>120)d->fps=0;
+        snprintf(d->provedor,sizeof d->provedor,"%s",addon[c.indices[i]].nome);
+        snprintf(d->rotulo,sizeof d->rotulo,"%s",ling_nome(d->idioma));
+        int duplicate=0;
+        for(int j=0;j<contagem[i];j++)if(!strcmp(d->url,porAddon[i][j].url) && !strcasecmp(d->idioma,porAddon[i][j].idioma)){duplicate=1;break;}
+        if(!duplicate)contagem[i]++;
       }
       printf("[legendas] %s: %d resultado(s)\n", addon[c.indices[i]].nome, contagem[i]);
     }
-    // Rodadas evitam que o primeiro addon ocupe o limite global sozinho.
-    for (k = 0; k < LEG_POR_ADDON && nAchadas < LEG_MAX; k++)
-      for (i = 0; i < c.n && nAchadas < LEG_MAX; i++)
-        if (k < contagem[i]) achadas[nAchadas++] = porAddon[i][k];
+    // The Enhanced merges by addon order; the menu sorts each language by ID.
+    for(i=0;i<c.n && nAchadas<LEG_MAX;i++)
+      for(k=0;k<contagem[i] && nAchadas<LEG_MAX;k++)achadas[nAchadas++]=porAddon[i][k];
     for (i = 0; i < c.n; i++) { free(porAddon[i]); free(c.corpos[i]); }
 
     pthread_mutex_lock(&legTrava);
     if (legParar) { fioLegVivo = 0; pthread_mutex_unlock(&legTrava); free(achadas); return NULL; }
     if (geracao != legGeracao) { pthread_mutex_unlock(&legTrava); free(achadas); continue; }
     memcpy(legs, achadas, (size_t)nAchadas * sizeof *achadas);
-    nLegs = nAchadas;
+    nLegs = nAchadas;legVersao++;
     fioLegVivo = 0;
     pthread_mutex_unlock(&legTrava);
     free(achadas);
@@ -949,8 +967,9 @@ void addons_sondar_manifestos(void) {
 }
 
 void addons_legendas_reiniciar(void) {
-  char id[64], tp[16];
+  char id[64], tp[16],filename[512],hash[64];uint64_t size;
   pthread_mutex_lock(&legTrava);
+  snprintf(filename,sizeof filename,"%s",legFilename);snprintf(hash,sizeof hash,"%s",legHash);size=legSize;
   snprintf(id, sizeof id, "%s", legId);
   snprintf(tp, sizeof tp, "%s", legTipo);
   // Zerar o alvo e o que desarma a guarda de "mesmo pedido" logo abaixo; a
@@ -959,10 +978,14 @@ void addons_legendas_reiniciar(void) {
   nLegs = 0;
   legGeracao++;
   pthread_mutex_unlock(&legTrava);
-  if (id[0]) addons_buscar_legendas(id, tp[0] ? tp : "movie");
+  if (id[0]) addons_buscar_legendas_fonte(id,tp[0]?tp:"movie",filename,hash,size);
 }
 
-void addons_buscar_legendas(const char *imdb, const char *tipo) {
+void addons_buscar_legendas(const char *imdb,const char *tipo) {
+  addons_buscar_legendas_fonte(imdb,tipo,NULL,NULL,0);
+}
+void addons_buscar_legendas_fonte(const char *imdb,const char *tipo,
+    const char *filename,const char *hash,uint64_t size) {
   int serie, juntar = 0;
   char id[64], tp[16];
   if (!nAddon || !imdb || !*imdb) return;
@@ -974,13 +997,19 @@ void addons_buscar_legendas(const char *imdb, const char *tipo) {
   snprintf(tp, sizeof tp, "%s", serie ? "series" : "movie");
 
   pthread_mutex_lock(&legTrava);
-  if (!strcmp(id, legId) && !strcmp(tp, legTipo) && (fioLegVivo || nLegs > 0)) {
+  int same=!strcmp(id,legId) && !strcmp(tp,legTipo);
+  int sourceChanged=filename && (strcmp(filename,legFilename) || strcmp(hash?hash:"",legHash) || size!=legSize);
+  if(same && !sourceChanged && (fioLegVivo || nLegs>0)) {
     pthread_mutex_unlock(&legTrava);
     return;
   }
+  if(!same || filename) {
+    snprintf(legFilename,sizeof legFilename,"%s",filename?filename:"");
+    snprintf(legHash,sizeof legHash,"%s",hash?hash:"");legSize=size;
+  }
   snprintf(legId, sizeof legId, "%s", id);
   snprintf(legTipo, sizeof legTipo, "%s", tp);
-  legGeracao++;
+  legGeracao++;legVersao++;
   nLegs = 0;
   if (fioLegVivo) { pthread_mutex_unlock(&legTrava); return; }
   juntar = fioLegCriado;
