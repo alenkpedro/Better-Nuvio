@@ -1,5 +1,16 @@
 [
   {
+    "id": "2026-10-07-novidades-160",
+    "desde": "2026-10-07",
+    "ate": "2026-10-31",
+    "plataforma": "lg",
+    "ate_versao": "1.5.45",
+    "titulo": "1.6.0: o Better Nuvio de cara nova",
+    "titulo_en": "1.6.0: Better Nuvio, redesigned",
+    "texto": "O app inteiro foi redesenhado, com player novo, fila e modo maratona, histórico na Biblioteca, velocidade de reprodução e filtro por classificação nos perfis. A Home volta a mostrar todos os catálogos para quem usa coleções, e Português (Brasil) virou opção na legenda automática. Baixe em betternuvio.vercel.app (na LG, também pelo Homebrew Channel).",
+    "texto_en": "The whole app was redesigned, with a new player, queue and binge mode, history in the Library, playback speed and age-rating filters on profiles. Home shows every catalog again for collection users, and Portuguese (Brazil) is now an automatic subtitle option. Get it at betternuvio.vercel.app (on LG, also via Homebrew Channel)."
+  },
+  {
     "id": "2026-10-02-novidades-1543",
     "desde": "2026-10-02",
     "ate": "2026-10-20",
