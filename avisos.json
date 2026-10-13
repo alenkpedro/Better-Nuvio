@@ -1,5 +1,16 @@
 [
   {
+    "id": "2026-10-13-novidades-1611",
+    "desde": "2026-10-13",
+    "ate": "2026-11-10",
+    "plataforma": "lg",
+    "ate_versao": "1.6.10",
+    "titulo": "1.6.11: player mais limpo e legenda que se ajusta",
+    "titulo_en": "1.6.11: cleaner player, self-syncing subtitles",
+    "texto": "Player sem moldura, com Áudio e legendas na seta para baixo, elenco durante o filme e o painel A seguir. A legenda do addon agora se sincroniza sozinha pelas legendas embutidas no vídeo, e dá pra ajustar de ouvido. A função Ao vivo foi removida. Baixe em betternuvio.vercel.app (na LG, também pelo Homebrew Channel).",
+    "texto_en": "A frameless player with Audio and subtitles on the down arrow, cast while you watch and the Up next panel. Addon subtitles now sync themselves to the video's embedded subtitles, and you can fine-tune by ear. Live TV was removed. Get it at betternuvio.vercel.app (on LG, also via Homebrew Channel)."
+  },
+  {
     "id": "2026-10-07-novidades-160",
     "desde": "2026-10-07",
     "ate": "2026-10-31",
