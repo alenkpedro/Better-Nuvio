@@ -1,12 +1,12 @@
 {
-  "tag_name": "v1.5.26",
-  "body": "## Progresso da conta Nuvio\n- Episódios pausados continuam disponíveis mesmo quando outro dispositivo envia a posição sem a duração do vídeo. O app antes descartava esses registros na sincronização.\n- Quando o identificador do card de um arco difere do identificador do episódio reproduzido, o app associa o progresso à série e à temporada corretas. Isso cobre os arcos de Monstros, incluindo Lizzie Borden.\n## Continuar assistindo e retomada\n- O episódio salvo entra na fileira com o título do arco. Se o metadado informa a duração, a barra e o tempo restante são calculados a partir da posição recebida.\n- Ao iniciar um episódio que chegou sem duração, o player usa a posição absoluta salva para retomar, em vez de depender da porcentagem estimada. Assistir do começo continua começando em zero.\n## Verificação\n- O caso de Lizzie Borden foi confirmado na versão Mac com a sincronização da conta; o episódio apareceu no Continuar assistindo. Passaram os testes de sincronização, progresso local e montagem da fileira. O IPK LG webOS foi compilado e verificado quanto a credenciais pessoais.\n",
+  "tag_name": "v1.5.40",
+  "body": "## Nova faixa de prévias Seekr\n- Cinco prévias ao avançar ou retroceder, com o quadro selecionado destacado no centro.\n- Barra fina com o tempo escolhido à esquerda e a duração total à direita.\n- Quadros vizinhos em cache, com prioridade para o selecionado.\n- As prévias dependem da disponibilidade do Seekr para o arquivo.\n",
   "assets": [
     {
-      "name": "com.betternuvio.app_1.5.26_arm.ipk",
-      "size": 52079876,
-      "digest": "sha256:c5aafdda994d688e4f08345e86b9403e05154bedf361502489ccd6b7d0f5202c",
-      "browser_download_url": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.26_arm.ipk"
+      "name": "com.betternuvio.app_1.5.40_arm.ipk",
+      "size": 52259640,
+      "digest": "sha256:dc76019eee61675c9e8d9426f81d08b5c5af37631e83e1cd1dc7dc26044103f5",
+      "browser_download_url": "https://betternuvio.vercel.app/com.betternuvio.app_1.5.40_arm.ipk"
     }
   ]
 }

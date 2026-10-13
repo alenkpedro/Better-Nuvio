@@ -36,6 +36,8 @@ typedef struct {
   long tamanhoMB;       // 0 quando desconhecido
   char descricao[2048];
   char arquivo[512];
+  char videoHash[64];
+  uint64_t videoSize; // exact bytes supplied by the addon, for subtitle lookup
   // O QUE O ADDON DECLARA COMO "a mesma fonte" entre episodios:
   // behaviorHints.bingeGroup, a convencao do Stremio. Quem manda o campo
   // resolve o casamento entre episodios SEM heuristica nenhuma — e o proprio

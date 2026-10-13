@@ -18,7 +18,8 @@
 #ifndef NV_MKV_H
 #define NV_MKV_H
 
-#define MKV_MAX_FAIXAS 64
+// Inclui video e audio, alem das 128 legendas que o painel comporta.
+#define MKV_MAX_FAIXAS 256
 
 typedef struct {
   int  numero;        // TrackNumber (NAO e o `trackNum` da LG: ver mkv_casar_legendas)

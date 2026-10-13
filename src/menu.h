@@ -1,4 +1,4 @@
-// Navegacao superior: perfil a esquerda, destinos centrais expansivos,
+// Navegacao superior: perfil a esquerda, capsula central expansiva,
 // ajustes e relogio a direita.
 //
 // Ele nao e uma tela: e uma camada que aparece POR CIMA do conteudo e toma o
@@ -39,8 +39,8 @@ void menu_abrir(void);
 // Fecha sem escolher: o destaque volta para o destino atual.
 void menu_fechar(void);
 
-// 1 enquanto a barra e dona do D-pad. Vira 0 no instante da escolha, ainda com
-// a animacao de recolhimento em curso.
+// 1 enquanto a barra e dona do D-pad. OK do controle devolve foco ao conteudo;
+// com mouse, a capsula permanece aberta ate o cursor sair dela.
 int  menu_aberto(void);
 // Os destinos compactos permanecem visiveis nas telas principais.
 int  menu_visivel(void);

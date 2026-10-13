@@ -1,11 +1,12 @@
 #include "video.h"
+#include "media_clock.h"
+#include <time.h>
 #include "idioma.h"
 #include "linguas.h"
 #include "app_id.h"
 #include <SDL2/SDL.h>
 #include "marco.h"
 #include "mkv.h"
-#include "mkvass.h"
 #include "js.h"
 #include "lsregistro.h"
 #include <stdio.h>
@@ -166,6 +167,7 @@ static char cabecalhosMac[4096];
 int video_tocar(const char *u) {
   snprintf(urlAtual, sizeof urlAtual, "%s", u ? u : "");
 #ifdef NV_MAC_VIDEO
+  mac_video_preferir_audio(ling_audio());
   return mac_video_tocar(u, cabecalhosMac);
 #else
   return 0;
@@ -281,7 +283,13 @@ int  video_terminou(void) {
 #endif
 }
 unsigned video_bufferando_ms(void) { return 0; }
-int  video_n_audio(void) { return 0; }
+int video_n_audio(void) {
+#ifdef NV_MAC_VIDEO
+  return mac_video_n_audio();
+#else
+  return 0;
+#endif
+}
 int  video_n_legenda(void) {
 #ifdef NV_MAC_VIDEO
   return mac_video_n_legenda();
@@ -289,7 +297,13 @@ int  video_n_legenda(void) {
   return 0;
 #endif
 }
-const VideoFaixa *video_audio(int i) { (void)i; return 0; }
+const VideoFaixa *video_audio(int i) {
+#ifdef NV_MAC_VIDEO
+  return mac_video_audio(i);
+#else
+  (void)i;return NULL;
+#endif
+}
 const VideoFaixa *video_legenda(int i) {
 #ifdef NV_MAC_VIDEO
   return mac_video_legenda(i);
@@ -297,10 +311,22 @@ const VideoFaixa *video_legenda(int i) {
   (void)i; return 0;
 #endif
 }
-int video_legenda_ordinal_mkv(int i) { (void)i; return -1; }
+int video_legenda_ordinal_mkv(int i) {
+#ifdef NV_MAC_VIDEO
+  const VideoFaixa *f=mac_video_legenda(i);return f?f->ordinalMkv:-1;
+#else
+  (void)i;return -1;
+#endif
+}
 int  video_mkv_sondado(void) { return 2; }
 void video_sondar_mkv_agora(void) {}
-int  video_audio_atual(void) { return 0; }
+int video_audio_atual(void) {
+#ifdef NV_MAC_VIDEO
+  return mac_video_audio_atual();
+#else
+  return -1;
+#endif
+}
 int  video_legenda_atual(void) {
 #ifdef NV_MAC_VIDEO
   return mac_video_legenda_atual();
@@ -308,7 +334,13 @@ int  video_legenda_atual(void) {
   return -1;
 #endif
 }
-void video_escolher_audio(int i) { (void)i; }
+void video_escolher_audio(int i) {
+#ifdef NV_MAC_VIDEO
+  mac_video_escolher_audio(i);
+#else
+  (void)i;
+#endif
+}
 void video_escolher_legenda(int i) {
 #ifdef NV_MAC_VIDEO
   mac_video_escolher_legenda(i);
@@ -347,6 +379,7 @@ int video_altura(void) {
   return 0;
 #endif
 }
+double video_fps_atual(void) { return 0; }
 int  video_pode_forcar_sdr(void) { return 0; }
 // No Mac nao ha plano de video: 1 para que a tela de aspecto ofereca todos os
 // modos ao desenvolver, que e o mesmo que a LG faz.
@@ -501,6 +534,7 @@ static int       fonX = -1, fonY, fonW, fonH, dstX = -1, dstY, dstW, dstH;
 // Caracteristicas do fluxo, tiradas do evento videoInfo da assinatura do uMS.
 // O ACB precisa delas para descrever o video ao pipeline de exibicao.
 static int       vidW = 1920, vidH = 1080, vidTaxa = 30;
+static int       vidTaxaRecebida;
 static long      vidBits;
 static char      vidVarredura[24] = "progressive";
 // hdrType real informado pelo uMS para a camada que chegou ao decoder. Isto
@@ -536,6 +570,7 @@ static int dvPedido;
 static char      midia[64];
 static double    posSeg, durSeg;
 static int       tocando, pronto, ligado, falhou, terminou;
+static double mediaNow(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+t.tv_nsec/1e9; }
 // errorCode 200 "Audio Codec Not Supported": o VIDEO segue tocando e so o
 // audio morre. Ver o tratamento em lerEvento.
 static int       audioNaoSup;
@@ -997,7 +1032,7 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
     double v;
     v = numeroDe(p, "\"width\":");      if (v > 0) vidW = (int)v;
     v = numeroDe(p, "\"height\":");     if (v > 0) vidH = (int)v;
-    v = numeroDe(p, "\"frameRate\":");  if (v > 0) vidTaxa = (int)v;
+    v = numeroDe(p, "\"frameRate\":");  if (v > 0) { vidTaxa = (int)v; vidTaxaRecebida = 1; }
     v = numeroDe(p, "\"bitRate\":");    if (v > 0) vidBits = (long)v;
     { const char *q = strstr(p, "\"scanType\":\"");
       if (q) { const char *f; q += 12; f = strchr(q, '"');
@@ -1098,6 +1133,7 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
     // enquanto nao enche; reiniciar o relogio a cada repeticao daria um "faz
     // 0 ms que travou" eterno, que e exatamente o caso que se quer detectar.
     if (!bufferandoDesde) bufferandoDesde = SDL_GetTicks();
+    media_clock_running(mediaNow(),0);
     snprintf(m, sizeof m, "buffering INICIO (buffer %+.1fs a frente)",
              bufferSeg - posSeg);
     marco(m);
@@ -1105,12 +1141,14 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
   if (strstr(p, "bufferingEnd")) {
     char m[64];
     bufferandoDesde = 0;
+    media_clock_running(mediaNow(),tocando&&!pausaPedida);
     snprintf(m, sizeof m, "buffering FIM (buffer %+.1fs a frente)",
              bufferSeg - posSeg);
     marco(m);
   }
   if (strstr(p, "playing")) {
     tocando = 1;
+    media_clock_running(mediaNow(),!bufferandoDesde&&!pausaPedida);
     if (acb && midia[0]) {
       long tarefa = 0;
       // COM RECORTE DE FONTE, reaplicar o recorte — e nao a janela lisa. A
@@ -1134,8 +1172,9 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
     // pausa vinda do pipeline e o defeito.
     if (tocando && !pausaPedida) marco("pausado PELO PIPELINE");
     tocando = 0;
+    media_clock_running(mediaNow(),0);
   }
-  if (strstr(p, "endOfStream")) { tocando = 0; terminou = 1; marco("endOfStream"); }
+  if (strstr(p, "endOfStream")) { tocando = 0; media_clock_running(mediaNow(),0); terminou = 1; marco("endOfStream"); }
 
   // ERRO DO PIPELINE. Nao havia tratamento nenhum: quando o uMS recusava um
   // seek ou perdia a fonte, o app simplesmente parava e ninguem sabia por que —
@@ -1185,6 +1224,7 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
   { double v = numeroDe(p, "\"currentTime\":");
     if (v >= 0) {
       posSeg = v / 1000.0;
+      media_clock_sample(posSeg,mediaNow(),tocando&&!bufferandoDesde&&!seekEm);
       // Primeiro quadro com avanco: o numero de inicio de verdade.
       if (cronPediu && !cronQuadro && posSeg > 0.0) {
         cronQuadro = 1;
@@ -1525,19 +1565,7 @@ static void *lerMkv(void *arg) {
 
   snprintf(url, sizeof url, "%s", urlAtual);
 
-  // PRE-BUSCA (#92, v1.4.7): o inicio do arquivo ja foi lido ANTES do video
-  // pelo mkvass. Serve aqui sem um pedido a mais pela rede — com o video
-  // tocando e no mesmo CDN, que e justamente quando o do relato recusava.
-  n = 0;
-  { unsigned char *cab = NULL; long cabN = 0;
-    if (mkvass_cabecalho(url, &cab, &cabN)) {
-      n = mkv_faixas_do_trecho(cab, cabN, fx, MKV_MAX_FAIXAS, caps, MKV_MAX_CAPS, &nCaps);
-      printf("[mkv] sonda pelo trecho da pre-busca (%ld bytes, sem rede): %d faixa(s)%s\n", cabN, n,
-             n > 0 ? "" : " — Tracks nao coube, vai a rede");
-      fflush(stdout);
-      free(cab);
-    } }
-  if (n < 1) n = mkv_faixas_e_caps(url, fx, MKV_MAX_FAIXAS, caps, MKV_MAX_CAPS, &nCaps);
+  n = mkv_faixas_e_caps(url, fx, MKV_MAX_FAIXAS, caps, MKV_MAX_CAPS, &nCaps);
   if (nCaps > 0) {
     creditosNomeado = mkv_creditos_nomeados(caps, nCaps);
     creditosUltimo  = nCaps > 1 ? caps[nCaps - 1].inicio : 0.0;
@@ -1646,6 +1674,7 @@ static long agoraMs(void) {
 static int tocarInterno(const char *url, int comDV);
 
 int video_tocar(const char *url) {
+  vidTaxaRecebida = 0;
   dvRecuado = 0;
   falhou = 0; terminou = 0; audioNaoSup = 0;
   // FONTE NOVA, decisao nova: o "sem HDR" era sobre o arquivo anterior.
@@ -1682,7 +1711,7 @@ void video_bombear(void) {
   // sonda nao custa rede: dispara logo, e a legenda automatica decide no
   // sourceInfo em vez de esperar os 20 s de buffer.
   if (mkvPendente && !fioMkvVivo && urlAtual[0] &&
-      (bufferSeg - posSeg >= 20.0 || mkvass_cabecalho(urlAtual, NULL, NULL)))
+      (bufferSeg - posSeg >= 20.0))
     video_sondar_mkv_agora();
   // Avanco pendente que ja repousou.
   if (seekEm && SDL_GetTicks() >= seekEm) {
@@ -1813,6 +1842,7 @@ static int tocarInterno(const char *url, int comDV) {
   // entender no titulo seguinte, e insistir so arrisca a imagem de novo.)
   fonX = -1; dstX = dstY = dstW = dstH = -1;
   posSeg = durSeg = bufferSeg = 0; tocando = pronto = 0; midia[0] = 0;
+  media_clock_sample(0,mediaNow(),0);
   bufferandoDesde = 0;
   nAudio = nLeg = 0; audioAtual = 0; legAtual = -1; vidAtmos = 0;
   legUrlAtual[0] = 0; mkvPendente = 0;
@@ -1937,6 +1967,7 @@ void video_parar(void) {
     chamar("unload", b, soLog);
   }
   midia[0] = 0; tocando = pronto = 0; falhou = 0; audioNaoSup = 0;
+  media_clock_sample(0,mediaNow(),0);
 }
 
 void video_pausar(int pausado) {
@@ -1944,6 +1975,7 @@ void video_pausar(int pausado) {
   if (!ligado || !midia[0]) return;
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", midia);
   chamar(pausado ? "pause" : "play", b, soLog);
+  media_clock_running(mediaNow(),!pausado&&!bufferandoDesde);
   tocando = !pausado;
   pausaPedida = pausado;
 }
@@ -1972,6 +2004,7 @@ void video_buscar(double segundos) {
   if (!ligado || !midia[0]) return;
   if (segundos < 0) segundos = 0;
   posSeg = segundos;
+  media_clock_sample(segundos,mediaNow(),0);
   seekAlvo = segundos;
   seekEm = SDL_GetTicks() + SEEK_REPOUSO_MS;
 }
@@ -2141,7 +2174,7 @@ void video_janela_fonte(int sx, int sy, int sw, int sh,
   (void)b; (void)aoJanela;
 }
 
-double video_pos(void)      { return posSeg; }
+double video_pos(void)      { return media_clock_read(mediaNow()); }
 double video_duracao(void)  { return durSeg; }
 double video_buffer_fim(void) { return bufferSeg; }
 int    video_tocando(void)  { return tocando; }
@@ -2221,6 +2254,7 @@ int  video_tem_dolby_vision(void) {
 const char *video_hdr(void)       { return vidHdr; }
 int  video_largura(void)          { return vidW; }
 int  video_altura(void)           { return vidH; }
+double video_fps_atual(void)     { return vidTaxaRecebida ? vidTaxa : 0; }
 
 // Ver o bloco "TELA PRETA COM AUDIO TOCANDO" em video.h. Reaproveita a
 // maquinaria de `recuperando`, que ja sabe recarregar a fonte e voltar para a

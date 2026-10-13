@@ -874,6 +874,19 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   "  vec3 c = (uReg0*wE + uReg1*wD + uReg2*wT + uReg3*wB) / max(w, 0.001);\n"
   "  gl_FragColor = nv_dither(c, min(w, 1.0) * 0.5 * uCor.a);\n"
   "}\n",
+
+  // GFX_VIDRO_TOPO: uPar indica a origem na faixa capturada; foco/varre,
+  // seu tamanho. A arte de tras participa da cor do vidro a cada quadro.
+  "void main(){\n"
+  "  float m = borda(sdf(vUv, uRaio, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  vec2 uv = uPar + vUv * vec2(uFoco, uVarre);\n"
+  "  uv.y = 1.0 - uv.y;\n"
+  "  vec3 c = texture2D(uTex, clamp(uv, 0.0, 1.0)).rgb;\n"
+  "  c = mix(c, vec3(0.065, 0.069, 0.078), 0.58);\n"
+  "  c += (1.0 - smoothstep(0.0, 0.85, vUv.y)) * 0.035;\n"
+  "  gl_FragColor = nv_dither(c, uCor.a * m);\n"
+  "}\n",
 };
 
 // Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
@@ -900,7 +913,8 @@ static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
   {0,0},   /* GFX_CEU — procedural, sem textura */
   {1,0},   /* GFX_COR_GRAD — SDF do GFX_COR */
   {1,0},   /* GFX_ANEL_GRAD — SDF do GFX_ANEL */
-  {0,0}    /* GFX_AMBIENTE — procedural, tela cheia */
+  {0,0},   /* GFX_AMBIENTE — procedural, tela cheia */
+  {1,0}    /* GFX_VIDRO_TOPO — mascara arredondada */
 };
 
 static GLuint compila(GLenum tipo, const char *src) {
@@ -998,8 +1012,10 @@ int gfx_iniciar(void) {
 }
 
 static void desfEncerrar(void);
+static void vidroTopoEncerrar(void);
 void gfx_encerrar(void) {
   desfEncerrar();
+  vidroTopoEncerrar();
   for (int m = 0; m < GFX_NMODOS; m++)
     if (progs[m].prog) { glDeleteProgram(progs[m].prog); progs[m].prog = 0; }
   progAtual = -1;
@@ -1444,6 +1460,118 @@ void gfx_recorte(float x, float y, float w, float h) {
   GFX_OUTRO_FIM();
 }
 void gfx_sem_recorte(void) { glDisable(GL_SCISSOR_TEST); }
+
+// Vidro da barra. A copia tem somente 1120x128 unidades de layout; o filtro
+// trabalha em 280x32. A largura animada da capsula nunca realoca texturas.
+#define VIDRO_X 400.0f
+#define VIDRO_W 1120.0f
+#define VIDRO_H 128.0f
+#define VIDRO_BW 280
+#define VIDRO_BH 32
+static GLuint vidroCopia, vidroTex[2], vidroFbo[2];
+static int vidroCopiaW, vidroCopiaH, vidroPronto, vidroFalhou;
+
+static void vidroTopoEncerrar(void) {
+  if (vidroCopia) {
+    gfx_tex_esquecer(vidroCopia);
+    glDeleteTextures(1, &vidroCopia);
+    vidroCopia = 0;
+  }
+  for (int i = 0; i < 2; i++) {
+    if (vidroFbo[i]) glDeleteFramebuffers(1, &vidroFbo[i]);
+    if (vidroTex[i]) {
+      gfx_tex_esquecer(vidroTex[i]);
+      glDeleteTextures(1, &vidroTex[i]);
+    }
+    vidroFbo[i] = vidroTex[i] = 0;
+  }
+  vidroCopiaW = vidroCopiaH = vidroPronto = vidroFalhou = 0;
+}
+
+static GLuint vidroTextura(int w, int h) {
+  GLuint tex;
+  glGenTextures(1, &tex);
+  glBindTexture(GL_TEXTURE_2D, tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  gfx_tex_esquecer(0);
+  return tex;
+}
+
+void gfx_vidro_topo_capturar(void) {
+  GLint fbo, vp[4];
+  GLboolean mistura = glIsEnabled(GL_BLEND), tesoura = glIsEnabled(GL_SCISSOR_TEST);
+  vidroPronto = 0;
+  if (vidroFalhou) return;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
+  glGetIntegerv(GL_VIEWPORT, vp);
+  if (vp[2] <= 0 || vp[3] <= 0) return;
+  int x = (int)floorf(VIDRO_X * vp[2] / NV_TELA_W);
+  int w = (int)ceilf((VIDRO_X + VIDRO_W) * vp[2] / NV_TELA_W) - x;
+  int h = (int)ceilf(VIDRO_H * vp[3] / NV_TELA_H);
+  glActiveTexture(GL_TEXTURE0);
+  if (vidroCopia && (w != vidroCopiaW || h != vidroCopiaH))
+    vidroTopoEncerrar();
+  if (!vidroCopia) {
+    vidroCopia = vidroTextura(w, h);
+    vidroCopiaW = w; vidroCopiaH = h;
+    for (int i = 0; i < 2; i++) {
+      vidroTex[i] = vidroTextura(VIDRO_BW, VIDRO_BH);
+      glGenFramebuffers(1, &vidroFbo[i]);
+      glBindFramebuffer(GL_FRAMEBUFFER, vidroFbo[i]);
+      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                             GL_TEXTURE_2D, vidroTex[i], 0);
+      if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        vidroTopoEncerrar();
+        vidroFalhou = 1;
+        glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo);
+        return;
+      }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo);
+  }
+  GFX_OUTRO_INI();
+  glBindTexture(GL_TEXTURE_2D, vidroCopia);
+  glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                     vp[0] + x, vp[1] + vp[3] - h, w, h);
+  gfx_tex_esquecer(0);
+  glDisable(GL_SCISSOR_TEST);
+  glDisable(GL_BLEND);
+  glViewport(0, 0, VIDRO_BW, VIDRO_BH);
+  GfxRect cheio = {0, 0, NV_TELA_W, NV_TELA_H};
+  // As duas passadas invertem y duas vezes; a copia conserva a orientacao
+  // do framebuffer, tratada explicitamente pelo shader de composicao.
+  glBindFramebuffer(GL_FRAMEBUFFER, vidroFbo[0]);
+  gfx_rect(cheio, vidroCopia, GFX_BLUR, 0, 1.35f / VIDRO_BW, 0,
+            0, 0, 0, 0, 1);
+  glBindFramebuffer(GL_FRAMEBUFFER, vidroFbo[1]);
+  gfx_rect(cheio, vidroTex[0], GFX_BLUR, 0, 0, 1.35f / VIDRO_BH,
+            0, 0, 0, 0, 1);
+  glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)fbo);
+  glViewport(vp[0], vp[1], vp[2], vp[3]);
+  if (mistura) glEnable(GL_BLEND);
+  if (tesoura) glEnable(GL_SCISSOR_TEST);
+  vidroPronto = 1;
+  GFX_OUTRO_FIM();
+}
+
+void gfx_vidro_topo_desenhar(GfxRect r, float raio) {
+  if (!vidroPronto || r.x < VIDRO_X || r.x + r.w > VIDRO_X + VIDRO_W ||
+      r.y < 0 || r.y + r.h > VIDRO_H) {
+    gfx_cor(r, raio, .105f, .108f, .120f, .72f);
+    return;
+  }
+  float varreAnt = gfx_varre_atual;
+  gfx_varre_atual = r.h / VIDRO_H;
+  gfx_rect(r, vidroTex[1], GFX_VIDRO_TOPO, r.w / VIDRO_W,
+            (r.x - VIDRO_X) / VIDRO_W, r.y / VIDRO_H,
+            raio, 0, 0, 0, 1);
+  gfx_varre_atual = varreAnt;
+}
 
 static int criaAlvo(int i, int w, int h) {
   glGenTextures(1, &borTex[i]);

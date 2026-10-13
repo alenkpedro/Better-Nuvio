@@ -152,7 +152,7 @@ rm -f ./*.ipk
 # ajustes.txt sai pelo mesmo motivo, com dano menor: e a preferencia de LAYOUT
 # de quem montou, e ela chegaria como se fosse a de quem instalou.
 ARQ_DE_PESSOA="trakt.txt addons.txt tmdb.txt mdblist.txt ajustes.txt
-               progresso.txt nuvem.txt sessao.txt perfil.txt cliente.txt
+               progresso.txt watch-progress-v3.json nuvem.txt sessao.txt perfil.txt cliente.txt
                listas.txt guia-fav.txt"
 
 # UM POR PERFIL, entao o nome nao e fixo: stalker-p1.txt, stalker-p2.txt...
@@ -212,6 +212,9 @@ if [ "$1" = "--ipk" ]; then
   PALCO=$(mktemp -d); LIXO="$LIXO $PALCO"
   cp -R deploy/app "$PALCO/app"
   cp -R plugin-service "$PALCO/com.betternuvio.app.plugin"
+  # Ship a self-contained ES5 service, not source requiring a modern Node.
+  # Building here ensures every IPK contains the runtime tested for webOS.
+  node tools/service-build.cjs "$PALCO/com.betternuvio.app.plugin/runtime/service.cjs"
   # cache/ e cache de EXECUCAO, nao arte do pacote: sao megabytes de imagem
   # baixada que o app rebaixa sozinho.
   rm -rf "$PALCO/app/art/cache"

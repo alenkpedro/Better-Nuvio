@@ -41,4 +41,16 @@ static inline int seriealias_aplicar(CatItem *item) {
   return 1;
 }
 
+// O card publicado pela conta e uma serie independente, mesmo quando os
+// addons de streams so conhecem a temporada equivalente da antologia.
+static inline int seriealias_monster_card_temporada(const CatItem *item) {
+  static const char mae[] = "tt13207736";
+  if (!item || strcmp(item->tipo, "series") ||
+      strcmp(item->imdbFonte, mae) ||
+      (!strncmp(item->imdb, mae, sizeof mae - 1) &&
+       (!item->imdb[sizeof mae - 1] || item->imdb[sizeof mae - 1] == ':')))
+    return 0;
+  return seriealias_monster_temporada(item->titulo);
+}
+
 #endif

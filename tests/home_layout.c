@@ -1,7 +1,11 @@
 // Sem janela, rede ou TV: valida composição editorial e foco sobre dados reais
 // de catálogo (fixtures), usando a implementação da Home e do catálogo.
 #include <assert.h>
+#define ajustes_cw_ordem ordemTeste
 #include "../src/home.c"
+#undef ajustes_cw_ordem
+static int modoOrdemTeste;
+int ordemTeste(void) { return modoOrdemTeste; }
 
 void cachearte_marcar_grupo(int grupo, const char *url, int variante, int essencial, int emUso) {
   (void)grupo; (void)url; (void)variante; (void)essencial; (void)emUso;
@@ -296,6 +300,72 @@ int main(void) {
     assert(fabsf(sobraDireitaFoco(0, 0.0f)
                  - (lw * escalaDe(FILEIRA_NORMAL) * 0.5f
                     + (ajustes_borda_foco() ? NV_ANEL_FOCO : 0.0f))) < 0.01f);
+  }
+
+  // Complete resume list: page boundaries must never trap the remote focus.
+  // 137 crosses the old UI (12), animation (33), service (50) and sort (64) caps.
+  {
+    enum { TOTAL = 137 };
+    CatItem *all = calloc(TOTAL, sizeof *all);
+    CatFileira row = {0};
+    assert(all);
+    for (int i=0; i<TOTAL; i++) {
+      snprintf(all[i].imdb, sizeof all[i].imdb, "tt-resume-%03d", i);
+      snprintf(all[i].tipo, sizeof all[i].tipo, "movie");
+      snprintf(all[i].titulo, sizeof all[i].titulo, "Resume %d", i+1);
+    }
+    snprintf(row.chave, sizeof row.chave, "continue_watching");
+    snprintf(row.titulo, sizeof row.titulo, "Continuar assistindo");
+    row.n=TOTAL;
+    nPosViva=0;posVivaFoco[0]=0;filsAplicadas=-1;
+    cat_definir_tudo(all,TOTAL,&row,1);sincronizarFileiras();
+    assert(fileiras[0].total==TOTAL && fileiras[0].n==12 && !fileiras[0].verTudo);
+    foco.fileira=0;foco.coluna=0;
+    for (int c=1; c<TOTAL; c++) {
+      homeLiberarAte(0,foco.coluna+1);
+      assert(focus_mover(&foco,1,0));
+      assert(foco.coluna==c && fileiraItemIndice(&fileiras[0],c)==c);
+      if(c==11) {
+        // Reaching the last card preloads the next page before another press.
+        homeLiberarAte(0,foco.coluna+1);
+        assert(fileiras[0].n==24);
+      }
+      scrollX[0]=alvoScrollFil(0,c,0,0);
+      int first,end;cardJanela(0,fileiras[0].n,&first,&end);
+      assert(first<=c && end>c && end-first<=MAX_CARDS);
+      *cardFoco(0,c)=1;
+      assert(cardRevela(0,c) && *cardFoco(0,c)==1);
+    }
+    assert(fileiras[0].n==TOTAL && foco.nColunas[0]==TOTAL);
+    homeLiberarAte(0,TOTAL);assert(!focus_mover(&foco,1,0));
+    assert(focus_mover(&foco,-1,0) && foco.coluna==TOTAL-2);
+    posCapturar();
+    char focused[64];snprintf(focused,sizeof focused,"%s",all[TOTAL-2].imdb);
+    CatItem swap=all[0];all[0]=all[TOTAL-2];all[TOTAL-2]=swap;
+    // Move the focused title to an older page; restoration follows its ID.
+    swap=all[0];all[0]=all[81];all[81]=swap;
+    cat_definir_tudo(all,TOTAL,&row,1);sincronizarFileiras();
+    assert(foco.coluna==81 && !strcmp(cat_item(fileiraItemIndice(&fileiras[0],81))->imdb,focused));
+    assert(fileiras[0].n==TOTAL);
+    // A fresh position in an older page releases enough cards to restore it.
+    HomePos saved={0};snprintf(saved.chave,sizeof saved.chave,"continue_watching");
+    saved.coluna=81;snprintf(saved.itemId,sizeof saved.itemId,"%s",focused);
+    snprintf(saved.itemTipo,sizeof saved.itemTipo,"movie");
+    fileiras[0].n=foco.nColunas[0]=12;
+    assert(posAplicarTabela(&saved,1,saved.chave,81)==0 && foco.coluna==81);
+    assert(fileiras[0].n==84);
+    // Upcoming items use their own complete, paginated list as well.
+    const char *future[70];for(int i=0;i<70;i++)future[i]=all[i].imdb;
+    cwo_publicar_futuros(future,70);modoOrdemTeste=CWO_SEPARAR;
+    nPosViva=0;posVivaFoco[0]=0;filsAplicadas=-1;sincronizarFileiras();
+    int upcoming=-1;
+    for(int r=0;r<nFileiras;r++)if(fileiras[r].listaContinua==2)upcoming=r;
+    assert(upcoming>=0 && fileiras[upcoming].total==70 && fileiras[0].total==67);
+    homeLiberarAte(upcoming,69);
+    assert(fileiras[upcoming].n==70 && fileiraItemIndice(&fileiras[upcoming],69)==69);
+    cwo_publicar_futuros(NULL,0);modoOrdemTeste=CWO_PADRAO;
+    cat_definir_tudo(NULL,0,NULL,0);free(all);
+    puts("ok  full continue watching: 137 titles, pages of 12, last card, restoration and upcoming");
   }
 
   free(itensTeste);

@@ -9,7 +9,7 @@ set -eu
 cd "$(dirname "$0")/.."
 flags=()
 if [ "${SANITIZE:-0}" = 1 ]; then flags+=(-fsanitize=address,undefined -fno-omit-frame-pointer); fi
-cc ${flags[@]+"${flags[@]}"} src/psfundo.c src/catalogo.c src/artehero.c \
+cc tests/engine_adapter_stubs.c ${flags[@]+"${flags[@]}"} src/psfundo.c src/catalogo.c src/artehero.c \
   tests/psfundo.c \
   -Isrc -o /tmp/nuvio-psfundo-tests -O1 -g \
   -Wall -Wno-deprecated-declarations -Wno-macro-redefined

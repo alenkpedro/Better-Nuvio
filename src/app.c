@@ -1,3 +1,4 @@
+#include "watch_service.h"
 // Roteador de telas.
 //
 // Antes disto o main.c decidia entre home e detalhe com um if. Com menu, busca,
@@ -435,6 +436,10 @@ static void idDoAlvo(const CatItem *ci, char *dst, size_t n) {
       t = ci->temporadaFonte > 0 ? ci->temporadaFonte :
           ci->temporada > 0 ? ci->temporada : 1;
       e = ci->episodio > 0 ? ci->episodio : 1;
+    }
+    if (ci->imdbFonte[0] && t == 1) {
+      int arco = seriealias_monster_temporada(ci->titulo);
+      if (arco > 0) t = arco;
     }
     snprintf(dst, n, "%s:%d:%d", id, t, e);
   }
@@ -1730,6 +1735,10 @@ void app_atualizar(float dt, Uint32 agora) {
         if (cw && !strcmp(cw->tipo, "series")) {
           ProxSugestao prox;
           cwTocarT = cw->temporada; cwTocarE = cw->episodio;
+          if (cw->imdbFonte[0] && cwTocarT == 1) {
+            int arco = seriealias_monster_temporada(cw->titulo);
+            if (arco > 0) cwTocarT = arco;
+          }
           if (prox_para_item(cw, cat_episodio(it.indice, 0),
                              cat_n_episodios(it.indice),
                              (long long)time(NULL) * 1000LL, &prox)) {
@@ -1814,7 +1823,9 @@ void app_atualizar(float dt, Uint32 agora) {
         // Tipo incerto ("anime" do AIOMetadata) tambem: e o /meta que diz se
         // e serie, mesmo quando o catalogo ja trouxe elenco.
         if (!strcmp(ci->tipo, "series") || strcmp(ci->tipo, "movie") ||
-            ci->nElenco == 0) desc_episodios(i, ci->temporadaFonte);
+            ci->nElenco == 0)
+          desc_episodios(i, seriealias_monster_card_temporada(ci) ? 1 :
+                            ci->temporadaFonte);
         // Legendas do OpenSubtitles junto: sao dezenas por titulo e a busca
         // leva segundos. Pedir so quando o dono abre a folha de faixas faria
         // ele esperar de olho numa lista vazia.
@@ -2380,6 +2391,7 @@ void app_atualizar(float dt, Uint32 agora) {
     }
   }
 
+  cw_service_pump(!player_aberto() && !detail_aberto());
   player_atualizar(dt, agora);
   detail_atualizar(dt, agora);
   menu_atualizar(dt, agora);

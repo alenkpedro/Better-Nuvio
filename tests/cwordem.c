@@ -4,6 +4,7 @@
 //
 //   bash tests/cwordem.sh
 #include "../src/cwordem.h"
+#include "../src/progresso.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -61,8 +62,8 @@ int main(void) {
   cwo_marcar_estreia("tt1:1:2", AGORA + DIA);   // regravar troca, nao duplica
   assert(cwo_estreia("tt1:1:2") == AGORA + DIA);
   { char id[32];
-    for (i = 0; i < 200; i++) { snprintf(id, sizeof id, "tt9:%d:1", i); cwo_marcar_estreia(id, i); }
-    assert(cwo_estreia("tt9:199:1") == 199);   // cheia: a mais nova fica
+    for (i = 0; i < PROG_MAX+200; i++) { snprintf(id, sizeof id, "tt9:%d:1", i); cwo_marcar_estreia(id, i); }
+    assert(cwo_estreia("tt9:2247:1") == 2247);   // cheia: a mais nova fica
     assert(cwo_estreia("tt9:0:1") == CWO_SEM_DATA); }
   puts("ok  estreias: regravar troca, tabela cheia gira");
 
@@ -97,6 +98,16 @@ int main(void) {
     assert(cwo_data_curta(1792539000000LL, agora, 0, 0, b, sizeof b) && !strcmp(b, "20 out"));
     assert(!cwo_data_curta(CWO_SEM_DATA, agora, 0, 0, b, sizeof b) && !b[0]); }
   puts("ok  rotulo do futuro: 21 out / Oct 21, ano so quando outro, UTC");
+  { CwoItem many[137];int order[137],seen[137]={0};
+    for(i=0;i<137;i++)many[i]=(CwoItem){i%2,AGORA+(137-i)*DIA};
+    assert(cwo_ordenar(many,137,CWO_STREAMING,AGORA,order)==69);
+    for(i=0;i<137;i++){assert(order[i]>=0 && order[i]<137 && !seen[order[i]]);seen[order[i]]=1;}
+    assert(order[136]==1);
+    char names[137][32];const char *ids[137];
+    for(i=0;i<137;i++){snprintf(names[i],sizeof names[i],"future-%d",i);ids[i]=names[i];}
+    cwo_publicar_futuros(ids,137);assert(cwo_e_futuro(ids[136]));
+    cwo_publicar_futuros(NULL,0);
+    puts("ok complete ordering and future publication beyond 64 titles"); }
   puts("cwordem: tudo ok");
   return 0;
 }

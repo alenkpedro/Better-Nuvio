@@ -12,6 +12,7 @@
 #ifndef NV_ADDONS_H
 #define NV_ADDONS_H
 #include <stddef.h>
+#include <stdint.h>
 
 // Limite compartilhado pelo leitor da conta e pela lista em memoria. Manter
 // os dois iguais evita descartar addons do fim da ordem antes de resolver as
@@ -98,16 +99,23 @@ void addons_buscar(const char *imdb, const char *tipo);
 // {"subtitles":[{lang,url,subtitleFileName,...}]}. Sao dezenas por titulo, a
 // A UI virtualiza a lista. Reservamos entradas para todos os provedores,
 // inclusive quando o primeiro retorna dezenas de arquivos.
-#define LEG_MAX 256
+#define LEG_MAX 1024
 
 typedef struct {
   char rotulo[64];   // "Portugues (BR)  ·  Silo.S01E05.WEB"
-  char idioma[8];
+  char idioma[16];
   char provedor[64];
-  char url[600];
+  char id[512];     // provider ID / release shown by the Enhanced menu
+  char url[4096];
+  char cabecalhos[2048];
+  char arquivo[256]; // nome completo, sem truncar para o rotulo visual
+  char lancamento[256]; // versao de release, quando distinta do nome da legenda
+  double fps;        // 0 quando o addon nao declara a taxa
 } Legenda;
 
 void addons_buscar_legendas(const char *imdb, const char *tipo);
+void addons_buscar_legendas_fonte(const char *id,const char *tipo,
+  const char *filename,const char *videoHash,uint64_t videoSize);
 
 // REFAZ a busca do titulo que esta carregado agora, descartando a lista atual.
 //
@@ -123,6 +131,7 @@ void addons_buscar_legendas(const char *imdb, const char *tipo);
 void addons_legendas_reiniciar(void);
 
 int  addons_n_legendas(void);
+unsigned addons_legendas_versao(void);
 // 1 quando a busca do titulo pedido TERMINOU (a lista nao cresce mais). 0
 // enquanto o fio corre e tambem quando nada foi pedido: sem pedido, a lista em
 // memoria pode ser de outro titulo. Quem liga legenda sozinho (faixas.c, #129)

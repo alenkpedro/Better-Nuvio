@@ -1,0 +1,159 @@
+{
+  "subtitles": [
+    {
+      "id": "sub_toolbox",
+      "lang": "Sub Toolbox",
+      "url": "https://subtitles.example.invalid/submaker/0.srt"
+    },
+    {
+      "id": "12857299",
+      "lang": "spa",
+      "url": "https://subtitles.example.invalid/submaker/1.srt"
+    },
+    {
+      "id": "12853188",
+      "lang": "spa",
+      "url": "https://subtitles.example.invalid/submaker/2.srt"
+    },
+    {
+      "id": "12853105",
+      "lang": "spa",
+      "url": "https://subtitles.example.invalid/submaker/3.srt"
+    },
+    {
+      "id": "12855680",
+      "lang": "ita",
+      "url": "https://subtitles.example.invalid/submaker/4.srt"
+    },
+    {
+      "id": "subsource_10263178",
+      "lang": "ita",
+      "url": "https://subtitles.example.invalid/submaker/5.srt"
+    },
+    {
+      "id": "12853151",
+      "lang": "pob",
+      "url": "https://subtitles.example.invalid/submaker/6.srt"
+    },
+    {
+      "id": "12852950",
+      "lang": "pob",
+      "url": "https://subtitles.example.invalid/submaker/7.srt"
+    },
+    {
+      "id": "12852520",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/8.srt"
+    },
+    {
+      "id": "12852296",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/9.srt"
+    },
+    {
+      "id": "12752512",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/10.srt"
+    },
+    {
+      "id": "subdl_3695433_8616398",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/11.srt"
+    },
+    {
+      "id": "subdl_3694834_8615629",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/12.srt"
+    },
+    {
+      "id": "subdl_3694833_8615628",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/13.srt"
+    },
+    {
+      "id": "subdl_3689399_8608260",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/14.srt"
+    },
+    {
+      "id": "subsource_10262644",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/15.srt"
+    },
+    {
+      "id": "scs_eyJjb250ZW50X3R5cGUiOiJtb3ZpZSIsImNvbnRlbnRfaWQiOiJ0dDY2Mjg5MjAiLCJsYW5nIjoiZW5nIiwidl9oYXNoIjpudWxsLCJ2X3NpemUiOm51bGwsInZfZm5hbWUiOm51bGx9",
+      "lang": "eng",
+      "url": "https://subtitles.example.invalid/submaker/16.srt"
+    },
+    {
+      "id": "translate_12857299_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/17.srt"
+    },
+    {
+      "id": "translate_12853188_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/18.srt"
+    },
+    {
+      "id": "translate_12853105_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/19.srt"
+    },
+    {
+      "id": "translate_12855680_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/20.srt"
+    },
+    {
+      "id": "translate_subsource_10263178_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/21.srt"
+    },
+    {
+      "id": "translate_12852520_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/22.srt"
+    },
+    {
+      "id": "translate_12852296_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/23.srt"
+    },
+    {
+      "id": "translate_12752512_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/24.srt"
+    },
+    {
+      "id": "translate_subdl_3695433_8616398_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/25.srt"
+    },
+    {
+      "id": "translate_subdl_3694834_8615629_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/26.srt"
+    },
+    {
+      "id": "translate_subdl_3694833_8615628_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/27.srt"
+    },
+    {
+      "id": "translate_subdl_3689399_8608260_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/28.srt"
+    },
+    {
+      "id": "translate_subsource_10262644_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/29.srt"
+    },
+    {
+      "id": "translate_scs_eyJjb250ZW50X3R5cGUiOiJtb3ZpZSIsImNvbnRlbnRfaWQiOiJ0dDY2Mjg5MjAiLCJsYW5nIjoiZW5nIiwidl9oYXNoIjpudWxsLCJ2X3NpemUiOm51bGwsInZfZm5hbWUiOm51bGx9_to_pob",
+      "lang": "Make Portuguese (Brazilian)",
+      "url": "https://subtitles.example.invalid/submaker/30.srt"
+    }
+  ]
+}

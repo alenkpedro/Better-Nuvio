@@ -15,31 +15,7 @@
 #include <time.h>
 
 void continuar_desenhar(const CatItem *ci, GfxRect r, float raio) {
-  CatItem copia;
-  ProxSugestao prox;
-  int idx;
   if (!ci) return;
-  // Episodio semeado ja terminado: o card passa a anunciar o PROXIMO, quando a
-  // regra portada do web deixa (ver proximo.h). A decisao mora aqui, e nao na
-  // home, porque so muda o que este card ESCREVE — nenhuma fileira nova, nenhum
-  // poster a mais para decodificar.
-  //
-  // O teto de PROX_MAX_BUSCAS nao precisa ser aplicado aqui: a fileira ja nasce
-  // com 8 itens (trakt_continuar, em descoberta.c), bem abaixo dele.
-  idx = cat_indice_por_imdb(ci->imdb);
-  if (idx >= 0 &&
-      prox_para_item(ci, cat_episodio(idx, 0), cat_n_episodios(idx),
-                     (long long)time(NULL) * 1000LL, &prox)) {
-    copia = *ci;
-    copia.temporada = prox.temporada;
-    copia.episodio  = prox.episodio;
-    snprintf(copia.nomeEpisodio, sizeof copia.nomeEpisodio, "%s", prox.nome);
-    // O selo de "restam N min" e da duracao do episodio ANTERIOR e a barra e do
-    // progresso dele; nenhum dos dois descreve um episodio que nao comecou.
-    copia.restanteMin = 0;
-    copia.progresso = 0;
-    ci = &copia;
-  }
 
   {
   float esc = r.w / NV_DESTAQUE_W;
@@ -49,7 +25,8 @@ void continuar_desenhar(const CatItem *ci, GfxRect r, float raio) {
   gfx_rect(r, 0, GFX_VEU, 0, 0, 0, raio, 0, 0, 0, .85f);
 
   // Um retangulo compacto, nao uma pilula. Nunca inventar status de estreia.
-  if (ci->restanteMin > 0 || (ci->progresso == 0 && (trakt_e_a_seguir(ci->imdb) || simkl_e_a_seguir(ci->imdb)))) {
+  if (ci->restanteMin > 0 || ci->posicaoSeg > 0 ||
+      (ci->progresso == 0 && ci->continuarSeguinte)) {
     char selo[48];
     int h = ci->restanteMin / 60, m = ci->restanteMin % 60;
     // "A SEGUIR" e nao "53min Restantes": o item de progresso 0 e o proximo
@@ -64,8 +41,12 @@ void continuar_desenhar(const CatItem *ci, GfxRect r, float raio) {
         cwo_data_curta(cwo_estreia(ci->imdb), (long long)time(NULL) * 1000LL,
                        ajustes_idioma_ingles(), 0, quando, sizeof quando))
       snprintf(selo, sizeof selo, i18n("Estreia %s"), quando);
-    else if (ci->progresso == 0 && (trakt_e_a_seguir(ci->imdb) || simkl_e_a_seguir(ci->imdb)))
+    else if (ci->progresso == 0 && ci->continuarSeguinte)
       snprintf(selo, sizeof selo, "%s", i18n("A seguir"));
+    else if (ci->posicaoSeg > 0 && ci->restanteMin <= 0)
+      snprintf(selo, sizeof selo, "%d:%02d %s", (int)ci->posicaoSeg / 60,
+               (int)ci->posicaoSeg % 60,
+               !ajustes_idioma_ingles() ? "assistidos" : "watched");
     else if (h && m) snprintf(selo, sizeof selo, i18n("%dh %dmin Restantes"), h, m);
     else if (h) snprintf(selo, sizeof selo, i18n("%dh Restantes"), h);
     else snprintf(selo, sizeof selo, i18n("%dmin Restantes"), m);

@@ -21,3 +21,7 @@
 .DS_Store
 __pycache__/
 *.pyc
+/tools/service-build/node_modules/
+/plugin-service/runtime/service.cjs
+
+/private/

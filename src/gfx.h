@@ -190,7 +190,8 @@ typedef enum {
   // macias (esquerda, direita, topo, base) com as cores de regiao da arte,
   // numa passada so de tela cheia, com dither contra faixas. Use gfx_ambiente.
   GFX_AMBIENTE = 33,
-  GFX_NMODOS = 34
+  GFX_VIDRO_TOPO = 34, // captura desfocada sob a capsula de navegacao
+  GFX_NMODOS = 35
 } GfxModo;
 
 typedef struct {
@@ -247,6 +248,12 @@ void gfx_recorte(float x, float y, float w, float h);
 void gfx_icones_dir(const char *dirArte);
 void gfx_icone(GfxRect r, const char *nome, float cr, float cg, float cb, float ca);
 void gfx_sem_recorte(void);
+
+// Vidro da navegacao: captura so a faixa central do topo antes de desenhar
+// a barra e desfoca em dois alvos de 280x32. Nunca captura a tela inteira.
+// O desenho volta ao framebuffer/viewport original, inclusive nas capturas.
+void gfx_vidro_topo_capturar(void);
+void gfx_vidro_topo_desenhar(GfxRect r, float raio);
 
 int  gfx_snap_iniciar(int w, int h);
 unsigned int gfx_snap_textura(void);

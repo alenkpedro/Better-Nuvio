@@ -131,6 +131,7 @@ int stream_extrair(const char *json, const char *provedor, Stream **saida) {
       js_texto(p, fim, "title", titulo, sizeof titulo);
       snprintf(s.titulo, sizeof s.titulo, "%s", titulo);
       js_texto(p, fim, "filename", s.arquivo, sizeof s.arquivo);
+      js_texto(p, fim, "videoHash", s.videoHash, sizeof s.videoHash);
       // behaviorHints.bingeGroup — ANCORADO NO OBJETO, e nao procurado solto.
       //
       // Duas coisas separadas, e as duas custam uma linha:
@@ -169,7 +170,7 @@ int stream_extrair(const char *json, const char *provedor, Stream **saida) {
       s.mp4 = token(texto, "mp4") || contem(s.url, ".mp4");
       s.foraCache = stream_texto_fora_de_cache(texto);
       double bytes = js_num(p, fim, "videoSize", 0);
-      if (bytes > 0) s.tamanhoMB = (long)(bytes / (1024.0 * 1024.0));
+      if (bytes > 0) { s.videoSize=(uint64_t)bytes;s.tamanhoMB = (long)(bytes / (1024.0 * 1024.0)); }
       else {
         const char *u = strstr(texto, " GB");
         double escala = 1024;

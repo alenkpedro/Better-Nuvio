@@ -1,10 +1,12 @@
 {
   "id": "com.betternuvio.app",
-  "version": "1.5.26",
+  "version": "1.5.40",
   "vendor": "Better Nuvio",
   "type": "native",
   "main": "nuvio-proto",
-  "services": ["com.betternuvio.app.plugin"],
+  "services": [
+    "com.betternuvio.app.plugin"
+  ],
   "title": "Better Nuvio",
   "icon": "icon.png",
   "largeIcon": "icon-large.png",

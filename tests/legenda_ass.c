@@ -1,6 +1,7 @@
 // Regressao do parser ASS/SSA (#92). Sem SDL, sem rede: le as fixtures de
 // tests/fixtures/ass e confere o que a tela vai receber por legenda_cues.
 #include "legenda.h"
+#include "rede.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,8 @@
 // Stub de rede.h: legenda.c chama rede_baixar no fio de download, que este
 // teste nunca dispara.
 char *rede_baixar(const char *url, int segundos) { (void)url; (void)segundos; return NULL; }
+
+char *rede_baixar_bin_medido_controle(const char *u,int s,const char *const *h,const RedeControle *c,long *n,RedeMedida *m){(void)u;(void)s;(void)h;(void)c;(void)n;(void)m;return NULL;}
 
 static int falhas;
 #define OK(cond, ...) do { if (cond) printf("ok   " __VA_ARGS__); else { printf("FALHA " __VA_ARGS__); falhas++; } printf("\n"); } while (0)
