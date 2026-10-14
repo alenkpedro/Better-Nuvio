@@ -639,6 +639,20 @@ int txt_iniciar(const char *dirRecursos, float escala) {
              caminhoReserva[e][0] ? caminhoReserva[e] : "nenhuma");
     } }
 
+  // Reserva de arabe embutida: funciona em qualquer plataforma mesmo sem
+  // fonte de sistema (LG sem DroidNaskh, Samsung WASM, Android). So e usada
+  // quando nenhum candidato de sistema foi encontrado acima.
+  if (!caminhoReserva[ESC_ARABE][0] && baseFontes[0]) {
+    char emb[512];
+    snprintf(emb, sizeof emb, "%sfonts/NotoNaskhArabic-Regular.ttf", baseFontes);
+    FILE *fe = fopen(emb, "rb");
+    if (fe) {
+      fclose(fe);
+      snprintf(caminhoReserva[ESC_ARABE], sizeof caminhoReserva[ESC_ARABE],
+               "%s", emb);
+    }
+  }
+
   marco("fontes: inicio");
   int candidatos[] = { fonteAppEscolhida, 0, 3, 4 };
   const char *const nomes[] = { "Inter Display", "DM Sans", "Open Sans", "LG Display", "DroidSans" };
