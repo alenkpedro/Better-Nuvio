@@ -1,5 +1,16 @@
 [
   {
+    "id": "2026-10-22-novidades-1616",
+    "desde": "2026-10-22",
+    "ate": "2026-11-19",
+    "plataforma": "lg",
+    "ate_versao": "1.6.15",
+    "titulo": "1.6.16: sessão em grupo e selos no player",
+    "titulo_en": "1.6.16: watch party and player badges",
+    "texto": "Assista junto com amigos, até com quem usa o Nuvio oficial: comece uma sessão em grupo pelo player e compartilhe o código. O player mostra 4K, Dolby Vision, Atmos e o áudio ativo, a legenda ganhou 7 fontes e a navegação ficou mais suave. Baixe em betternuvio.vercel.app (na LG, também pelo Homebrew Channel).",
+    "texto_en": "Watch together with friends, even on the official Nuvio: start a watch party from the player and share the code. The player shows 4K, Dolby Vision, Atmos and the active audio, subtitles get 7 fonts and browsing is smoother. Get it at betternuvio.vercel.app (on LG, also via Homebrew Channel)."
+  },
+  {
     "id": "2026-10-13-novidades-1611",
     "desde": "2026-10-13",
     "ate": "2026-11-10",
